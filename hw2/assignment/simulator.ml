@@ -427,8 +427,86 @@ exception Redefined_sym of lbl
 
   HINT: List.fold_left and List.fold_right are your friends.
  *)
-let assemble (p:prog) : exec =
-failwith "assemble unimplemented"
+type lbl_ht = (lbl, int) Hashtbl.t
+
+let asmlen : asm -> int = function
+  | Text t -> 8 * List.length t
+  | Data d ->
+    List.fold_left ( + ) 0
+    @@ List.map
+         (function
+           | Asciz s -> String.length s
+           | _ -> 8)
+         d
+
+let assemble (p : prog) : exec =
+  let tblks, dblks =
+    List.partition
+      (fun e ->
+        match e.asm with
+        | Text _ -> true
+        | Data _ -> false)
+      p
+  in
+  let ht : lbl_ht = Hashtbl.create 1000 in
+
+  let insert_lbl (l : lbl) (v : int) : unit =
+    match Hashtbl.find_opt ht l with
+    | Some _ -> raise (Redefined_sym l)
+    | None -> Hashtbl.add ht l v in
+
+  let read_lbl (l : lbl) : quad =
+    match Hashtbl.find_opt ht l with
+    | None -> raise (Undefined_sym l)
+    | Some v -> Int64.add 0x400000L (Int64.of_int v) in
+
+  let i = ref 0 in
+  let _ =
+    List.iter
+      (fun { asm; lbl; _ } ->
+        insert_lbl lbl !i;
+        i := !i + asmlen asm)
+      (tblks @ dblks)
+  in
+
+  let resolve_imm = function
+    | Lbl l -> Lit (read_lbl l)
+    | any -> any in
+
+  let resolve_opr = function
+    | Imm x -> Imm (resolve_imm x)
+    | Ind1 x -> Ind1 (resolve_imm x)
+    | Ind3 (x, r) -> Ind3 (resolve_imm x, r)
+    | any -> any in
+
+  let resolve_ins ((op, oprs) : ins) = op, List.map resolve_opr oprs in
+
+  let resolve_data = function
+    | Quad x -> Quad (resolve_imm x)
+    | any -> any in
+
+  let text_seg =
+    List.concat_map
+      (fun { asm; _ } ->
+        match asm with
+        | Text t -> List.concat_map sbytes_of_ins @@ List.map resolve_ins t
+        | _ -> failwith "unreachable")
+      tblks
+  in
+  let data_seg =
+    List.concat_map
+      (fun { asm; _ } ->
+        match asm with
+        | Data d -> List.concat_map sbytes_of_data @@ List.map resolve_data d
+        | _ -> failwith "unreachable")
+      dblks
+  in
+  { entry = read_lbl "main"
+  ; text_pos = 0x400000L
+  ; data_pos = Int64.add 0x400000L @@ Int64.of_int @@ List.length text_seg
+  ; text_seg
+  ; data_seg
+  }
 
 (* Convert an object file into an executable machine state. 
     - allocate the mem array
@@ -443,5 +521,25 @@ failwith "assemble unimplemented"
   Hint: The Array.make, Array.blit, and Array.of_list library functions 
   may be of use.
 *)
-let load {entry; text_pos; data_pos; text_seg; data_seg} : mach = 
-failwith "load unimplemented"
+let load { entry; text_seg; data_seg; _ } : mach =
+  let mem =
+    begin
+      let arr = Array.make mem_size (Byte '\x00') in
+      let tarr = Array.of_list text_seg in
+      let darr = Array.of_list data_seg in
+      Array.blit tarr 0 arr 0 (List.length text_seg);
+      Array.blit darr 0 arr (List.length text_seg) (List.length data_seg);
+      Array.blit (sbytearr_of_int64 exit_addr) 0 arr (Array.length arr - 8) 8;
+      arr
+    end
+  in
+    { mem
+    ; flags = { fo = false; fz = false; fs = false }
+    ; regs =
+        begin
+        let rs = Array.make nregs 0L in
+        rs.(rind Rip) <- entry;
+        rs.(rind Rsp) <- Int64.sub mem_top 8L;
+        rs
+        end
+    }
