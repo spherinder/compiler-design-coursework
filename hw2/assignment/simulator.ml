@@ -207,174 +207,172 @@ let writeDst ({flags;regs;mem} as m:mach) (dst:operand) (v:quad) : unit =
     Array.blit (sbytearr_of_int64 v) 0 mem i 8
   | Imm _ -> raise (Failure "can not write to constant")
 
-let step ({flags; regs; mem} as m : mach) : unit =
-  let* rip = map_addr (regs.(rind Rip)) in
-  let opc, oprs = match mem.(rip) with
-    | InsB0 x -> x | _ -> raise (Failure "Invalid instruction") in
+let step ({ flags; regs; mem } as m : mach) : unit =
+  let* rip = map_addr regs.(rind Rip) in
+  let opc, oprs =
+    match mem.(rip) with
+    | InsB0 x -> x
+    | _ -> raise (Failure "Invalid instruction")
+  in
   regs.(rind Rip) <- Int64.add regs.(rind Rip) 8L;
   match opc, oprs with
-  | Negq, [dst] ->
+  | Negq, [ dst ] ->
     let res = Int64.neg (readind m dst) in
     flags.fo <- res = Int64.min_int;
     flags.fz <- res = 0L;
     flags.fs <- sign res;
     writeDst m dst res
-  | Addq, [src;dst] ->
+  | Addq, [ src; dst ] ->
     let d = readind m dst in
     let s = readind m src in
     let res = Int64.add d s in
-    flags.fo <- (sign d = sign s) && (sign res <> sign s);
+    flags.fo <- sign d = sign s && sign res <> sign s;
     flags.fz <- res = 0L;
     flags.fs <- sign res;
     writeDst m dst res
-  | Subq, [src;dst] ->
+  | Subq, [ src; dst ] ->
     let d = readind m dst in
     let s = readind m src in
     let res = Int64.sub d s in
-    flags.fo <- (sign d <> sign s) && (sign res <> sign d);
+    flags.fo <- sign d <> sign s && sign res = sign s;
     flags.fz <- res = 0L;
     flags.fs <- sign res;
     writeDst m dst res
-  | Imulq, [src;dst] ->
-    let {value=res; overflow=fo} : O.t = O.mul (readind m src) (readind m dst) in
+  | Imulq, [ src; dst ] ->
+    let { value = res; overflow = fo } : O.t = O.mul (readind m src) (readind m dst) in
     flags.fo <- fo;
     writeDst m dst res
-  | Incq, [dst] ->
+  | Incq, [ dst ] ->
     let d = readind m dst in
     let res = Int64.add d 1L in
-    flags.fo <- not (sign d) && sign res;
+    flags.fo <- (not (sign d)) && sign res;
     flags.fz <- res = 0L;
     flags.fs <- sign res;
     writeDst m dst res
-  | Decq, [dst] ->
+  | Decq, [ dst ] ->
     let d = readind m dst in
     let res = Int64.sub d 1L in
-    flags.fo <- sign d && sign res;
+    flags.fo <- sign d && not (sign res);
     flags.fz <- res = 0L;
     flags.fs <- sign res;
     writeDst m dst res
-  | Notq, [dst] ->
-    writeDst m dst @@ Int64.lognot (readind m dst)
-  | Andq, [src;dst] ->
+  | Notq, [ dst ] -> writeDst m dst @@ Int64.lognot (readind m dst)
+  | Andq, [ src; dst ] ->
     let res = Int64.logand (readind m dst) (readind m src) in
     flags.fo <- false;
     flags.fz <- res = 0L;
     flags.fs <- sign res;
     writeDst m dst res
-  | Orq, [src;dst] ->
+  | Orq, [ src; dst ] ->
     let res = Int64.logor (readind m dst) (readind m src) in
     flags.fo <- false;
     flags.fz <- res = 0L;
     flags.fs <- sign res;
     writeDst m dst res
-  | Xorq, [src;dst] ->
+  | Xorq, [ src; dst ] ->
     let res = Int64.logxor (readind m dst) (readind m src) in
     flags.fo <- false;
     flags.fz <- res = 0L;
     flags.fs <- sign res;
     writeDst m dst res
-  | Sarq, [src;dst] ->
-    begin match src with
+  | Sarq, [ src; dst ] -> begin
+    match src with
     | Reg Rcx | Imm _ ->
       let s = readind m src in
       let res = Int64.shift_right (readind m dst) (Int64.to_int s) in
-      if s <> 0L then begin
+      if s <> 0L
+      then begin
         if s = 1L then flags.fo <- false else ();
         flags.fz <- res = 0L;
         flags.fs <- sign res
-      end else ();
+      end
+      else ();
       writeDst m dst res
     | _ -> raise (Failure "only shift with imm or rcx")
-    end
-  | Shlq, [src;dst] ->
-    begin match src with
+  end
+  | Shlq, [ src; dst ] -> begin
+    match src with
     | Reg Rcx | Imm _ ->
       let s = readind m src in
       let d = readind m dst in
       let res = Int64.shift_left d (Int64.to_int s) in
-      if s <> 0L then begin
-        if s = 1L then
-          flags.fo <- sign d <> sign (Int64.shift_left d 1)
-        else ();
+      if s <> 0L
+      then begin
+        if s = 1L then flags.fo <- sign d <> sign (Int64.shift_left d 1) else ();
         flags.fz <- res = 0L;
         flags.fs <- sign res
-      end else ();
+      end
+      else ();
       writeDst m dst res
     | _ -> raise (Failure "only shift with imm or rcx")
-    end
-  | Shrq, [src;dst] ->
-    begin match src with
+  end
+  | Shrq, [ src; dst ] -> begin
+    match src with
     | Reg Rcx | Imm _ ->
       let s = readind m src in
       let d = readind m dst in
       let res = Int64.shift_right_logical d (Int64.to_int s) in
-      if s <> 0L then begin
+      if s <> 0L
+      then begin
         flags.fs <- sign res;
-        flags.fz <- (res = 0L);
+        flags.fz <- res = 0L;
         if s = 1L then flags.fo <- sign d else ()
-      end else
-        ();
+      end
+      else ();
       writeDst m dst res
     | _ -> raise (Failure "only shift with imm or rcx")
-    end
-  | Set cnd, [dst] ->
+  end
+  | Set cnd, [ dst ] ->
     let cc = interp_cnd flags cnd in
-    begin match dst with
-    | Reg r ->
-      regs.(rind r) <-
-        let nofst = Int64.logand regs.(rind r) 0xFFFFFFF0L in
-        if cc then Int64.add nofst 1L else nofst
-    | Ind1 _ | Ind2 _ | Ind3 _ ->
-      let* i = map_addr (readval m dst) in
-      mem.(i) <- Byte (if cc then '\x01' else '\x00')
-    | Imm _ -> raise (Failure "can not write to constant")
+    begin
+      match dst with
+      | Reg r ->
+        regs.(rind r)
+        <- (let masked = Int64.logand regs.(rind r) 0xFFFFFFFFFFFFFF00L in
+            if cc then Int64.add masked 1L else masked)
+      | Ind1 _ | Ind2 _ | Ind3 _ ->
+        let* i = map_addr (readval m dst) in
+        mem.(i) <- Byte (if cc then '\x01' else '\x00')
+      | Imm _ -> raise (Failure "can not write to constant")
     end
-  | Leaq, [src;dst] ->
-    begin match src with
+  | Leaq, [ src; dst ] -> begin
+    match src with
     | Ind1 _ | Ind2 _ | Ind3 _ -> writeDst m dst (readval m src)
     | _ -> raise (Failure "leaq only works on indirections")
-    end
-  | Movq, [src;dst] ->
-    writeDst m dst (readind m src)
-  | Pushq, [src] ->
+  end
+  | Movq, [ src; dst ] -> writeDst m dst (readind m src)
+  | Pushq, [ src ] ->
     writeDst m (Reg Rsp) (Int64.sub (readind m (Reg Rsp)) 8L);
-    writeDst m (Ind3 (Lit 0L,Rsp)) (readind m src)
-  | Popq, [dst] ->
-    writeDst m dst (readind m (Ind3 (Lit 0L,Rsp)));
+    writeDst m (Ind2 Rsp) (readind m src)
+  | Popq, [ dst ] ->
+    writeDst m dst (readind m (Ind2 Rsp));
     writeDst m (Reg Rsp) (Int64.add (readind m (Reg Rsp)) 8L)
-  | Cmpq, [src;dst] ->
+  | Cmpq, [ src; dst ] ->
     let d = readind m dst in
     let s = readind m src in
     let res = Int64.sub d s in
-    flags.fo <- (sign d <> sign s) && (sign res <> sign d);
+    flags.fo <- sign d <> sign s && sign res <> sign d;
     flags.fz <- res = 0L;
-    flags.fs <- sign res;
-  | Jmp, [src] ->
-    writeDst m (Reg Rip) (readind m src)
-  | Callq, [src] ->
+    flags.fs <- sign res
+  | Jmp, [ src ] -> writeDst m (Reg Rip) (readind m src)
+  | Callq, [ src ] ->
     writeDst m (Reg Rsp) (Int64.sub (readind m (Reg Rsp)) 8L);
-    (* ugly hack to un-increment rip! *)
-    writeDst m (Ind3 (Lit 0L,Rsp)) (Int64.sub (readind m (Reg Rip)) 8L);
+    writeDst m (Ind2 Rsp) (readind m (Reg Rip));
     writeDst m (Reg Rip) (readind m src)
   | Retq, [] ->
-    writeDst m (Reg Rip) (readind m (Ind3 (Lit 0L,Rsp)));
+    writeDst m (Reg Rip) (readind m (Ind3 (Lit 0L, Rsp)));
     writeDst m (Reg Rsp) (Int64.add (readind m (Reg Rsp)) 8L)
-  | J cnd, [src] ->
-    if interp_cnd flags cnd then
-      writeDst m (Reg Rip) (readind m src)
-    else ()
+  | J cnd, [ src ] ->
+    if interp_cnd flags cnd then writeDst m (Reg Rip) (readind m src) else ()
   | _ -> raise (Failure "Wrong number of arguments probably")
 
-let test_machine (bs: sbyte list): mach =
-  let mem = (Array.make mem_size (Byte '\x00')) in
-  Array.blit (Array.of_list bs) 0 mem 0 (List.length bs);
+let test_machine (bs : sbyte list) : mach =
+  let mem = Array.make mem_size (Byte '\x00') in
+  Array.blit (Array.of_list bs) 0 mem 0 (List.length bs) ;
   let regs = Array.make nregs 0L in
-  regs.(rind Rip) <- mem_bot;
-  regs.(rind Rsp) <- Int64.sub mem_top 8L;
-  { flags = {fo = false; fs = false; fz = false};
-    regs = regs;
-    mem = mem
-  }
+  regs.(rind Rip) <- mem_bot ;
+  regs.(rind Rsp) <- Int64.sub mem_top 8L ;
+  {flags= {fo= false; fs= false; fz= false}; regs; mem}
 
 let (~$) i = Imm (Lit (Int64.of_int i))      (* int64 constants *)
 let (~%) r = Reg r                           (* registers *)
