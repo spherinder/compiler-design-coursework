@@ -435,7 +435,7 @@ let asmlen : asm -> int = function
     List.fold_left ( + ) 0
     @@ List.map
          (function
-           | Asciz s -> String.length s
+           | Asciz s -> String.length s + 1
            | _ -> 8)
          d
 
