@@ -161,7 +161,7 @@ let interp_cnd {fo; fs; fz} : cnd -> bool = function
    or None if the address is not within the legal address space. *)
 let map_addr (addr:quad) : int option =
   let (-) = Int64.sub in
-  if mem_bot <= addr && addr <= mem_top
+  if mem_bot <= addr && addr < mem_top
   then Some (Int64.to_int (addr - mem_bot))
   else None
 
@@ -366,28 +366,28 @@ let step ({ flags; regs; mem } as m : mach) : unit =
     if interp_cnd flags cnd then writeDst m (Reg Rip) (readind m src) else ()
   | _ -> raise (Failure "Wrong number of arguments probably")
 
-let test_machine (bs : sbyte list) : mach =
-  let mem = Array.make mem_size (Byte '\x00') in
-  Array.blit (Array.of_list bs) 0 mem 0 (List.length bs) ;
-  let regs = Array.make nregs 0L in
-  regs.(rind Rip) <- mem_bot ;
-  regs.(rind Rsp) <- Int64.sub mem_top 8L ;
-  {flags= {fo= false; fs= false; fz= false}; regs; mem}
+(* let test_machine (bs : sbyte list) : mach = *)
+(*   let mem = Array.make mem_size (Byte '\x00') in *)
+(*   Array.blit (Array.of_list bs) 0 mem 0 (List.length bs) ; *)
+(*   let regs = Array.make nregs 0L in *)
+(*   regs.(rind Rip) <- mem_bot ; *)
+(*   regs.(rind Rsp) <- Int64.sub mem_top 8L ; *)
+(*   {flags= {fo= false; fs= false; fz= false}; regs; mem} *)
 
-let (~$) i = Imm (Lit (Int64.of_int i))      (* int64 constants *)
-let (~%) r = Reg r                           (* registers *)
-let stack_offset (i: quad) : operand = Ind3 (Lit i, Rsp)
+(* let (~$) i = Imm (Lit (Int64.of_int i))      (\* int64 constants *\) *)
+(* let (~%) r = Reg r                           (\* registers *\) *)
+(* let stack_offset (i: quad) : operand = Ind3 (Lit i, Rsp) *)
 
-let mov_mr = test_machine [InsB0 (Movq, [~$42; ~%Rax]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag ;InsB0 (Movq, [~%Rax; stack_offset (-8L)]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag]
-let mov_mr2 = test_machine [InsB0 (Movq, [~$42; ~%Rax]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag ;InsB0 (Movq, [~%Rax; stack_offset (-8L)]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag]
-let mov_mr3 = test_machine [InsB0 (Movq, [~$42; ~%Rax]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag ;InsB0 (Movq, [~%Rax; stack_offset (-8L)]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag]
-(* let mov_mr = test_machine *)
-(*   [InsB0 (Movq, [~$42; ~%Rax]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag *)
-(*   ;InsB0 (Movq, [~%Rax; stack_offset (-8L)]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag] *)
+(* let mov_mr = test_machine [InsB0 (Movq, [~$42; ~%Rax]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag ;InsB0 (Movq, [~%Rax; stack_offset (-8L)]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag] *)
+(* let mov_mr2 = test_machine [InsB0 (Movq, [~$42; ~%Rax]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag ;InsB0 (Movq, [~%Rax; stack_offset (-8L)]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag] *)
+(* let mov_mr3 = test_machine [InsB0 (Movq, [~$42; ~%Rax]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag ;InsB0 (Movq, [~%Rax; stack_offset (-8L)]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag] *)
+(* (\* let mov_mr = test_machine *\) *)
+(* (\*   [InsB0 (Movq, [~$42; ~%Rax]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag *\) *)
+(* (\*   ;InsB0 (Movq, [~%Rax; stack_offset (-8L)]);InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag;InsFrag] *\) *)
 
-let _ = step mov_mr2
+(* let _ = step mov_mr2 *)
 
-let _ = step mov_mr3
+(* let _ = step mov_mr3 *)
 (* let _ = step mov_mr3 *)
 
 (* Runs the machine until the rip register reaches a designated

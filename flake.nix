@@ -21,6 +21,8 @@
             ocaml-ng.ocamlPackages_4_13.ocp-indent
             ocaml-ng.ocamlPackages_4_13.ocamlformat
             ocaml-ng.ocamlPackages_4_13.utop
+            ocaml-ng.ocamlPackages_4_13.ocaml-lsp
+            ocaml-ng.ocamlPackages_4_13.dune_3
             # ocamlPackages.merlin
             # ocamlPackages.ocp-indent
             # ocamlPackages.ocamlformat
