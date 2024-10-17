@@ -234,7 +234,7 @@ let step ({ flags; regs; mem } as m : mach) : unit =
     let d = readind m dst in
     let s = readind m src in
     let res = Int64.sub d s in
-    flags.fo <- sign d <> sign s && sign res = sign s;
+    flags.fo <- (sign d <> sign s && sign res = sign s) || s = Int64.min_int;
     flags.fz <- res = 0L;
     flags.fs <- sign res;
     writeDst m dst res
