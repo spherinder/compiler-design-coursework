@@ -72,7 +72,7 @@ type terminator =
 | Cbr of operand * lbl * lbl
 
 (* Basic Blocks *)
-type block = { insns : (uid * insn) list; term : (uid * terminator) }
+type block = { insns :(uid * insn) list; term : (uid * terminator) }
 
 (* Control Flow Graphs: entry and labeled blocks *)
 type cfg = block * (lbl * block) list

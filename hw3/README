@@ -1,4 +1,4 @@
-Using main.native:
+Uising main.native:
 
 main.native acts like the clang compiler.  Given several .ll, .c, and .o files,
 it will compile the .ll files to .s files (using the compilerdesign backend) and then combine

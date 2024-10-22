@@ -59,7 +59,11 @@ type ctxt = { tdecls : (tid * ty) list
 
 (* useful for looking up items in tdecls or layouts *)
 let lookup m x = List.assoc x m
-
+(*custom helpers*)
+let get_layout (ctxt:ctxt):layout = 
+  {tdecls = _; layout = l} -> l
+let get_tdecls (ctxt:ctxt):layout =
+  {tdecls = t; layout = _} -> t
 
 (* compiling operands  ------------------------------------------------------ *)
 
@@ -89,10 +93,13 @@ let lookup m x = List.assoc x m
    destination (usually a register).
 *)
 let compile_operand (ctxt:ctxt) (dest:X86.operand) : Ll.operand -> ins =
-  function _ -> failwith "compile_operand unimplemented"
-
-
-
+  let movq (s, d) = (Movq, [s;d])
+  and layout = get_layout ctxt in
+      function
+      | Null -> movq (Imm 0L, dest)
+      | Const num -> movq (Imm num, dest)
+      | Gid gid ->  movq( ,dest)
+      | Id uid -> let src = lookup layout uid in movq (src, dest)
 (* compiling call  ---------------------------------------------------------- *)
 
 (* You will probably find it helpful to implement a helper function that
@@ -221,7 +228,11 @@ let mk_lbl (fn:string) (l:string) = fn ^ "." ^ l
    [fn] - the name of the function containing this terminator
 *)
 let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
-  failwith "compile_terminator not implemented"
+  let stack_teardown = (Movq, [Reg Rbp; Reg Rsp]) :: (Popq, [Reg Rbp] )::[]
+  in
+  match t with
+  | Ret (Void, None) -> stack_teardown @ [(Retq,[])] 
+  | Ret _ -> [] (*failwith "compile_terminator not implemented" *)
 
 
 (* compiling blocks --------------------------------------------------------- *)
@@ -232,7 +243,9 @@ let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
    [blk]  - LLVM IR code for the block
 *)
 let compile_block (fn:string) (ctxt:ctxt) (blk:Ll.block) : ins list =
-  failwith "compile_block not implemented"
+  match blk with
+  {insns= i_; term = (uid, term)} -> compile_terminator fn ctxt term
+  
 
 let compile_lbl_block fn lbl ctxt blk : elem =
   Asm.text (mk_lbl fn lbl) (compile_block fn ctxt blk)
@@ -249,8 +262,16 @@ let compile_lbl_block fn lbl ctxt blk : elem =
 
    [ NOTE: the first six arguments are numbered 0 .. 5 ]
 *)
-let arg_loc (n : int) : operand =
-failwith "arg_loc not implemented"
+let arg_loc (n : int) : operand = 
+    match n with
+    | 0 -> Reg Rdi
+    | 1 -> Reg Rsi
+    | 2 -> Reg Rdx  
+    | 3 -> Reg Rcx
+    | 4 -> Reg R08
+    | 5 -> Reg R09
+    | i -> Ind3( Lit(Int64.of_int @@ ((i + 1 - 7) + 2) * 8), Rbp) (*formula is ((i - 7) + 2)*8 (ref. lecture slides). +1 is because indexing here starts from 0*) 
+
 
 
 (* We suggest that you create a helper function that computes the
@@ -262,8 +283,8 @@ failwith "arg_loc not implemented"
    - see the discussion about locals
 
 *)
-let stack_layout (args : uid list) ((block, lbled_blocks):cfg) : layout =
-failwith "stack_layout not implemented"
+let stack_layout (args : uid list) ((block, lbled_blocks):cfg) : layout = 
+  List.mapi (fun n u -> (u, (Ind3 (Lit( Int64.of_int (-(n+1) * 8)), Rbp)))) args 
 
 (* The code for the entry-point of a function must do several things:
 
@@ -282,10 +303,18 @@ failwith "stack_layout not implemented"
      to hold all of the local stack slots.
 *)
 let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_ty; f_param; f_cfg }:fdecl) : prog =
-failwith "compile_fdecl unimplemented"
 
+  let layout = stack_layout f_param f_cfg in 
+    let ctxt = {tdecls = tdecls; layout = layout} in 
 
-
+      let stack_setup = (Pushq, [Reg Rbp]) :: (Movq, [Reg Rsp; Reg Rbp])::[]  
+      and arguments_alloc = 
+          List.mapi (fun inx u -> (Movq , [(arg_loc inx); snd (List.nth layout inx)]))  f_param  (* optimize *)
+      and first_block = compile_block name ctxt (fst f_cfg)
+      and tail_blocks = List.map (fun (lbl, blk) -> compile_lbl_block name lbl ctxt blk) (snd f_cfg) 
+    in
+      [Asm.text name @@ stack_setup @ arguments_alloc @ first_block] @ tail_blocks
+              (*TODO: give functions names*)
 (* compile_gdecl ------------------------------------------------------------ *)
 (* Compile a global value into an X86 global data declaration and map
    a global uid to its associated X86 label.
