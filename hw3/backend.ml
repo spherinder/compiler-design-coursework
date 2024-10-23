@@ -60,6 +60,7 @@ type ctxt = { tdecls : (tid * ty) list
 (* useful for looking up items in tdecls or layouts *)
 let lookup m x = List.assoc x m
 
+let todo = failwith "todo"
 
 (* compiling operands  ------------------------------------------------------ *)
 
@@ -88,8 +89,11 @@ let lookup m x = List.assoc x m
    the X86 instruction that moves an LLVM operand into a designated
    destination (usually a register).
 *)
-let compile_operand (ctxt:ctxt) (dest:X86.operand) : Ll.operand -> ins =
-  function _ -> failwith "compile_operand unimplemented"
+let compile_operand (layout:layout) (dest:X86.operand) : Ll.operand -> ins = function
+  | Null -> Movq, [Imm (Lit 0L); dest]
+  | Const x -> Movq, [Imm (Lit x); dest]
+  | Id id -> Movq, [lookup layout id; dest]
+  | Gid gid -> Leaq, [Ind3 (Lbl (Platform.mangle gid), Rip); dest]
 
 
 
@@ -113,6 +117,37 @@ let compile_operand (ctxt:ctxt) (dest:X86.operand) : Ll.operand -> ins =
    needed). ]
 *)
 
+let rec drop (i : int) (l : 'a list) : 'a list =
+  if i <= 0 then l
+  else match l with
+    | [] -> []
+    | _::xs -> drop (i-1) xs
+
+let rec take (i : int) (l : 'a list) : 'a list =
+  if i <= 0 then []
+  else match l with
+    | [] -> []
+    | x::xs -> x::take (i-1) xs
+
+let compile_call (layout:layout) (dest:X86.operand) (op : Ll.operand) (args: (ty * Ll.operand) list) : X86.ins list =
+  let regargs, stackargs = take 6 args, drop 6 args in
+  let regs = take (List.length regargs) [Rdi; Rsi; Rdx; Rcx; R08; R09] in
+  let stacksize = List.length stackargs * 8 in
+  (*register arguments*)
+  List.map2 (fun reg (_,arg)-> compile_operand layout (Reg reg) arg) regs regargs
+  (*stack arguments*)
+  @ (List.flatten @@ List.mapi (fun i (_,arg)->
+      [ compile_operand layout (Reg R10) arg
+      ; Movq, [Reg R10; Ind3 (Lit (Int64.of_int ((-i) * 8)), Rsp)]
+      ]
+    ) stackargs)
+  (*move stack pointer "up"*)
+  @ [Subq, [Imm (Lit (Int64.of_int stacksize)); Reg Rsp]]
+  (*call*)
+  @ [compile_operand layout (Reg R10) op
+    ; Callq, [Reg R10]
+    ; Movq, [Reg Rax; dest]
+    ]
 
 
 
@@ -138,10 +173,12 @@ let compile_operand (ctxt:ctxt) (dest:X86.operand) : Ll.operand -> ins =
    - Void, i8, and functions have undefined sizes according to LLVMlite.
      Your function should simply return 0 in those cases
 *)
-let rec size_ty (tdecls:(tid * ty) list) (t:Ll.ty) : int =
-failwith "size_ty not implemented"
-
-
+let rec size_ty (tdecls:(tid * ty) list) : Ll.ty -> int = function
+  | Void | I8 | Fun _ -> 0
+  | I1 | I64 | Ptr _ -> 8
+  | Struct ts -> List.fold_left (+) 0 @@ List.map (size_ty tdecls) ts
+  | Array (i, t) -> i * size_ty tdecls t
+  | Namedt tid -> size_ty tdecls @@ lookup tdecls tid
 
 
 (* Generates code that computes a pointer value.
@@ -197,8 +234,52 @@ failwith "compile_gep not implemented"
 
    - Bitcast: does nothing interesting at the assembly level
 *)
-let compile_insn (ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.ins list =
-      failwith "compile_insn not implemented"
+let compile_insn ({tdecls; layout} as ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.ins list =
+  let dest = lookup layout uid in
+  match i with
+  | Binop (bop, t, op1, op2) ->
+    (match t with I64 -> () | _ -> raise (Failure "binop type must be i64"));
+    [ compile_operand layout (Reg Rax) op1
+    ; compile_operand layout (Reg Rcx) op2
+    ] @
+    (match bop with
+     | Add -> [Addq, [Reg Rax; Reg Rcx]]
+     | Sub -> [Subq, [Reg Rax; Reg Rcx]]
+     | Mul -> [Imulq, [Reg Rax; Reg Rcx]]
+     | Shl -> [Shlq, [Reg Rax; Reg Rcx]]
+     | Lshr -> [Shrq, [Reg Rax; Reg Rcx]]
+     | Ashr -> [Sarq, [Reg Rax; Reg Rcx]]
+     | And -> [Andq, [Reg Rax; Reg Rcx]]
+     | Or -> [Orq, [Reg Rax; Reg Rcx]]
+     | Xor -> [Xorq, [Reg Rax; Reg Rcx]]
+    ) @
+    [Movq, [Reg Rcx; dest]]
+  | Alloca t ->
+    [Subq, [Imm (Lit (Int64.of_int (size_ty tdecls t))); Reg Rsp]] @
+    [Movq, [Reg Rsp; dest]]
+  | Load (_, op) ->
+    [compile_operand layout (Reg Rax) op] @
+    [Movq, [Ind2 Rax ; Reg Rcx]] @
+    [Movq, [Reg Rcx; dest]]
+  | Store (_, srcop, dstop) ->
+    [compile_operand layout (Reg Rax) srcop] @
+    [compile_operand layout (Reg Rcx) dstop] @
+    [Movq , [Reg Rax; Ind2 Rcx]]
+  | Icmp (cnd, _, op1, op2) ->
+    [ Movq, [Imm (Lit 0L); dest]
+    ; compile_operand layout (Reg Rax) op1
+    ; compile_operand layout (Reg Rcx) op2
+    ; Cmpq, [Reg Rax; Reg Rcx]
+    ; Set (compile_cnd cnd), [dest]
+    ]
+  | Call (_, op, args) -> compile_call layout dest op args
+  | Bitcast (_, op, _) ->
+    [ compile_operand layout (Reg Rax) op
+    ; Movq, [Reg Rax; dest]
+    ]
+  | Gep (t, op, ops) ->
+    compile_gep ctxt (t,op) ops
+
 
 
 
