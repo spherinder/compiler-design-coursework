@@ -341,7 +341,7 @@ let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_ty; f_param; f_cfg
       and tail_blocks = List.map (fun (lbl, blk) -> compile_lbl_block name lbl ctxt blk) (snd f_cfg) 
     in
     if !debug_backend then 
-      layout |> List.map (fun (u, instr) -> u ^ (string_of_operand instr)) |> String.concat "\n" |> String.cat "layout: "  |> print_endline
+      layout |> List.map (fun (u, instr) -> u ^ (string_of_operand instr)) |> String.concat "\n" |> String.cat "layout: \n"  |> print_endline
       else ();
 
     [Asm.text name (stack_setup @ arguments_alloc @ first_block)] @ tail_blocks  
