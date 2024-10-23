@@ -10,6 +10,7 @@ open X86
    plan for implementing the compiler is provided on the project web page.
 *)
 
+let debug_backend = ref true 
 
 (* helpers ------------------------------------------------------------------ *)
 
@@ -60,10 +61,10 @@ type ctxt = { tdecls : (tid * ty) list
 (* useful for looking up items in tdecls or layouts *)
 let lookup m x = List.assoc x m
 (*custom helpers*)
-let get_layout (ctxt:ctxt):layout = 
-  {tdecls = _; layout = l} -> l
-let get_tdecls (ctxt:ctxt):layout =
-  {tdecls = t; layout = _} -> t
+let get_layout (ctxt:ctxt) = 
+  match ctxt with {layout = l} -> l
+let get_tdecls (ctxt:ctxt) =
+  match ctxt with {tdecls = t} -> t
 
 (* compiling operands  ------------------------------------------------------ *)
 
@@ -96,9 +97,9 @@ let compile_operand (ctxt:ctxt) (dest:X86.operand) : Ll.operand -> ins =
   let movq (s, d) = (Movq, [s;d])
   and layout = get_layout ctxt in
       function
-      | Null -> movq (Imm 0L, dest)
-      | Const num -> movq (Imm num, dest)
-      | Gid gid ->  movq( ,dest)
+      | Null -> movq (Imm (Lit 0L), dest)
+      | Const num -> movq (Imm (Lit num), dest)
+      | Gid gid -> movq( Ind3 (Lbl (Platform.mangle gid), Rip) , dest)
       | Id uid -> let src = lookup layout uid in movq (src, dest)
 (* compiling call  ---------------------------------------------------------- *)
 
@@ -228,11 +229,17 @@ let mk_lbl (fn:string) (l:string) = fn ^ "." ^ l
    [fn] - the name of the function containing this terminator
 *)
 let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
-  let stack_teardown = (Movq, [Reg Rbp; Reg Rsp]) :: (Popq, [Reg Rbp] )::[]
+  let stack_teardown = (Movq, [Reg Rbp; Reg Rsp]) :: (Popq, [Reg Rbp] )::(Retq, [])::[]
+  and compile_mov src_ll dest_86 = compile_operand ctxt dest_86 src_ll 
+  and ind1_of_lbl lbl = Ind1(Lbl (mk_lbl fn lbl))
   in
   match t with
-  | Ret (Void, None) -> stack_teardown @ [(Retq,[])] 
-  | Ret _ -> [] (*failwith "compile_terminator not implemented" *)
+  | Ret (_, None) -> stack_teardown 
+  | Ret (_, Some res) ->   [compile_mov res (Reg Rax)] @ stack_teardown
+  | Br label -> [(Jmp, [ind1_of_lbl label])] 
+  | Cbr (op, label1, label2) -> [compile_mov op (Reg R08); (Cmpq, [Imm (Lit 0L); Reg R08]);
+                                  ((J Neq), [ind1_of_lbl label1]); (J Eq, [ind1_of_lbl label2])]
+
 
 
 (* compiling blocks --------------------------------------------------------- *)
@@ -283,8 +290,29 @@ let arg_loc (n : int) : operand =
    - see the discussion about locals
 
 *)
+
+
+let create_layout_entry uid offset =  (uid, (Ind3 (Lit( Int64.of_int offset), Rbp)))
+
+
 let stack_layout (args : uid list) ((block, lbled_blocks):cfg) : layout = 
-  List.mapi (fun n u -> (u, (Ind3 (Lit( Int64.of_int (-(n+1) * 8)), Rbp)))) args 
+  let args_layout = List.mapi (fun n u ->  create_layout_entry u (-(n+1) * 8) ) args in 
+
+    let cntr =  ref (List.length args_layout) in (* this is suspicious*)
+
+    let layout_block ({insns = insns; term = (tuid, term)}:block):layout =
+
+      let block_layout_init = List.mapi ( fun  n (u, instr) ->  create_layout_entry u (-(n + 1 + !cntr)*8 ) ) insns in
+        let _ = cntr:= !cntr + List.length insns + 1 in
+
+            let block_layout_fin = block_layout_init @ [( create_layout_entry tuid (!cntr * -8 ))] in (* putting the terminator result onto stack slot. May be unnecessary*)
+                    block_layout_fin
+          in 
+          args_layout @ (layout_block block) @ (List.concat_map (fun (lbl, blk) -> layout_block blk )  lbled_blocks)
+            
+
+
+            
 
 (* The code for the entry-point of a function must do several things:
 
@@ -306,14 +334,18 @@ let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_ty; f_param; f_cfg
 
   let layout = stack_layout f_param f_cfg in 
     let ctxt = {tdecls = tdecls; layout = layout} in 
-
       let stack_setup = (Pushq, [Reg Rbp]) :: (Movq, [Reg Rsp; Reg Rbp])::[]  
       and arguments_alloc = 
-          List.mapi (fun inx u -> (Movq , [(arg_loc inx); snd (List.nth layout inx)]))  f_param  (* optimize *)
-      and first_block = compile_block name ctxt (fst f_cfg)
+          List.mapi (fun inx u -> (Movq , [(arg_loc inx);  lookup layout u]))  f_param  (* optimize *)
+      and first_block = compile_block name ctxt (fst f_cfg) 
       and tail_blocks = List.map (fun (lbl, blk) -> compile_lbl_block name lbl ctxt blk) (snd f_cfg) 
     in
-      [Asm.text name @@ stack_setup @ arguments_alloc @ first_block] @ tail_blocks
+    if !debug_backend then 
+      layout |> List.map (fun (u, instr) -> u ^ (string_of_operand instr)) |> String.concat "\n" |> String.cat "layout: "  |> print_endline
+      else ();
+
+    [Asm.text name (stack_setup @ arguments_alloc @ first_block)] @ tail_blocks  
+(* compile_gdecl ------------------------------------------------------------ *)
               (*TODO: give functions names*)
 (* compile_gdecl ------------------------------------------------------------ *)
 (* Compile a global value into an X86 global data declaration and map
