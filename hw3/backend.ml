@@ -62,11 +62,6 @@ type ctxt = { tdecls : (tid * ty) list
 let lookup m x = List.assoc x m
 
 let todo = failwith "todo"
-(*custom helpers*)
-let get_layout (ctxt:ctxt) =
-  match ctxt with {layout = l} -> l
-let get_tdecls (ctxt:ctxt) =
-  match ctxt with {tdecls = t} -> t
 
 (* compiling operands  ------------------------------------------------------ *)
 
@@ -140,13 +135,12 @@ let compile_call (layout:layout) (dest:X86.operand) (op : Ll.operand) (args: (ty
   (*register arguments*)
   List.map2 (fun reg (_,arg)-> compile_operand layout (Reg reg) arg) regs regargs
   (*stack arguments*)
+  @ [Subq, [Imm (Lit (Int64.of_int stacksize)); Reg Rsp]]
   @ (List.flatten @@ List.mapi (fun i (_,arg)->
       [ compile_operand layout (Reg R10) arg
-      ; Movq, [Reg R10; Ind3 (Lit (Int64.of_int ((-i) * 8)), Rsp)]
+      ; Movq, [Reg R10; Ind3 (Lit (Int64.of_int (i * 8)), Rsp)]
       ]
     ) stackargs)
-  (*move stack pointer "up"*)
-  @ [Subq, [Imm (Lit (Int64.of_int stacksize)); Reg Rsp]]
   (*call*)
   @ [compile_operand layout (Reg R10) op
     ; Callq, [Reg R10]
