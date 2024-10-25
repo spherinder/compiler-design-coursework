@@ -204,9 +204,39 @@ let rec size_ty (tdecls:(tid * ty) list) : Ll.ty -> int = function
       in (4), but relative to the type f the sub-element picked out
       by the path so far
 *)
-let compile_gep (ctxt:ctxt) (op : Ll.ty * Ll.operand) (path: Ll.operand list) : ins list =
-failwith "compile_gep not implemented"
+let rec scanl (f : 'b -> 'a -> 'b) (q : 'b) (ls : 'a list) : 'b list = q :: (match ls with
+    | [] -> []
+    | x::xs -> scanl f (f q x) xs)
 
+let compile_gep ({layout; tdecls}:ctxt) (ptr_t,ptr : Ll.ty * Ll.operand) (path: Ll.operand list) : ins list =
+  let inner_ptr_t = match ptr_t with
+    | Ptr (Namedt lbl) -> lookup tdecls lbl (*TODO is this necessary?*)
+    | Ptr t -> t
+    | _ -> raise (Failure "gep takes a pointer")
+  in
+  let get_ty (t:Ll.ty) (op:Ll.operand) : Ll.ty =
+    match t,op with
+    | Struct ts, Const m -> List.nth ts @@ Int64.to_int m
+    | Array (_, t), _ -> t
+    | _ -> raise (Failure "gep only indexes into structs and arrays")
+  in
+  (* `take` drops last element *)
+  let path_ts = take (List.length path) @@ scanl get_ty inner_ptr_t path in
+
+  [compile_operand layout (Reg Rax) ptr]
+  @ (List.flatten @@ List.map2 (fun (t:Ll.ty) (op:Ll.operand) ->
+      match t, op with
+      | Struct ts, Const m ->
+        let offset = List.fold_left (+) 0 @@ List.map (size_ty tdecls) @@ take (Int64.to_int m) ts in
+        [Addq, [Imm (Lit (Int64.of_int offset)); Reg Rax]]
+      | Array (_, elem_t), _ ->
+        let elemsize = size_ty tdecls elem_t in
+        [ compile_operand layout (Reg Rcx) op
+        ; Imulq, [Imm (Lit (Int64.of_int elemsize)); Reg Rcx]
+        ; Addq, [Reg Rcx; Reg Rax]
+        ]
+      | _ -> raise (Failure "won't happen")
+    ) path_ts path)
 
 
 (* compiling instructions  -------------------------------------------------- *)
@@ -277,6 +307,7 @@ let compile_insn ({tdecls; layout} as ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.
     ]
   | Gep (t, op, ops) ->
     compile_gep ctxt (t,op) ops
+    @ [Movq, [Reg Rax; dest]]
 
 
 
@@ -320,9 +351,8 @@ let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
    [ctxt] - the current context
    [blk]  - LLVM IR code for the block
 *)
-let compile_block (fn:string) (ctxt:ctxt) (blk:Ll.block) : ins list =
-  match blk with
-  {insns= i_; term = (uid, term)} -> compile_terminator fn ctxt term
+let compile_block (fn:string) (ctxt:ctxt) ({insns; term = (_,term)}:Ll.block) : ins list =
+  List.concat_map (compile_insn ctxt) insns @ compile_terminator fn ctxt term
 
 
 let compile_lbl_block fn lbl ctxt blk : elem =
