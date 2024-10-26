@@ -61,16 +61,12 @@ type ctxt = { tdecls : (tid * ty) list
 (* useful for looking up items in tdecls or layouts *)
 let lookup m x = List.assoc x m
 
-<<<<<<< HEAD
-let todo = failwith "todo"
-=======
 (* let todo = failwith "todo" *)
 (*custom helpers*)
 let get_layout (ctxt:ctxt) =
   match ctxt with {layout = l} -> l
 let get_tdecls (ctxt:ctxt) =
   match ctxt with {tdecls = t} -> t
->>>>>>> 23af52e (version before pulling)
 
 (* compiling operands  ------------------------------------------------------ *)
 
@@ -342,14 +338,14 @@ let mk_lbl (fn:string) (l:string) = fn ^ "." ^ l
 let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
   let stack_teardown = (Movq, [Reg Rbp; Reg Rsp]) :: (Popq, [Reg Rbp] )::(Retq, [])::[]
   and compile_mov src_ll dest_86 = compile_operand ctxt.layout dest_86 src_ll
-  and ind1_of_lbl lbl = Ind1(Lbl (mk_lbl fn lbl))
   in
   match t with
   | Ret (_, None) -> stack_teardown
-  | Ret (_, Some res) ->   [compile_mov res (Reg Rax)] @ stack_teardown
-  | Br label -> [(Jmp, [ind1_of_lbl label])]
-  | Cbr (op, label1, label2) -> [compile_mov op (Reg R08); (Cmpq, [Imm (Lit 0L); Reg R08]);
-                                  ((J Neq), [ind1_of_lbl label1]); (J Eq, [ind1_of_lbl label2])]
+  | Ret (_, Some res) ->   [compile_mov res (Reg Rax)] @ stack_teardown 
+  | Br label -> [ (Jmp, [Imm(Lbl(Platform.mangle @@ mk_lbl fn label))])]
+  | Cbr (op, label1, label2) -> 
+  [compile_mov op (Reg R08); (Cmpq, [Imm (Lit 0L); Reg R08]);
+                                  (J Neq, [Imm (Lbl(Platform.mangle @@ mk_lbl fn label1))]); (J Eq, [Imm ( Lbl(Platform.mangle @@ mk_lbl fn label2))])]
 
 
 
@@ -360,13 +356,8 @@ let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
    [ctxt] - the current context
    [blk]  - LLVM IR code for the block
 *)
-<<<<<<< HEAD
-let compile_block (fn:string) (ctxt:ctxt) ({insns; term = (_,term)}:Ll.block) : ins list =
-  List.concat_map (compile_insn ctxt) insns @ compile_terminator fn ctxt term
-=======
 let compile_block (fn:string) (ctxt:ctxt) (blk:Ll.block) : ins list =
    (List.concat_map (compile_insn ctxt) blk.insns) @ (compile_terminator fn ctxt (snd blk.term))
->>>>>>> 23af52e (version before pulling)
 
 
 let compile_lbl_block fn lbl ctxt blk : elem =
@@ -451,7 +442,7 @@ let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_ty; f_param; f_cfg
     let ctxt = {tdecls = tdecls; layout = layout} in
       let stack_setup = (Pushq, [Reg Rbp]) :: (Movq, [Reg Rsp; Reg Rbp])::[]
       and arguments_alloc =
-          List.mapi (fun inx u -> (Movq , [(arg_loc inx);  lookup layout u]))  f_param  (* optimize *)
+          List.concat @@ List.mapi (fun inx u -> [(Movq , [(arg_loc inx);  (Reg R08)]);(Movq , [ (Reg R08);  lookup layout u])])  f_param  (* optimize *)
       and first_block = compile_block name ctxt (fst f_cfg)
       and tail_blocks = List.map (fun (lbl, blk) -> compile_lbl_block name lbl ctxt blk) (snd f_cfg)
     in
@@ -459,7 +450,7 @@ let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_ty; f_param; f_cfg
       layout |> List.map (fun (u, instr) -> u ^ (string_of_operand instr)) |> String.concat "\n" |> String.cat "layout: \n"  |> print_endline
       else ();
 
-    [Asm.text (Platform.mangle name) (stack_setup @ arguments_alloc @ first_block)] @ tail_blocks
+    [Asm.text (name) (stack_setup @ arguments_alloc @ first_block)] @ tail_blocks
 (* compile_gdecl ------------------------------------------------------------ *)
               (*TODO: give functions names*)
 (* compile_gdecl ------------------------------------------------------------ *)
