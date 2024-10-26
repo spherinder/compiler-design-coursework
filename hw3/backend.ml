@@ -10,7 +10,7 @@ open X86
    plan for implementing the compiler is provided on the project web page.
 *)
 
-let debug_backend = ref true
+let debug_backend = ref false 
 
 (* helpers ------------------------------------------------------------------ *)
 
@@ -61,7 +61,12 @@ type ctxt = { tdecls : (tid * ty) list
 (* useful for looking up items in tdecls or layouts *)
 let lookup m x = List.assoc x m
 
-let todo = failwith "todo"
+(* let todo = failwith "todo" *)
+(*custom helpers*)
+let get_layout (ctxt:ctxt) =
+  match ctxt with {layout = l} -> l
+let get_tdecls (ctxt:ctxt) =
+  match ctxt with {tdecls = t} -> t
 
 (* compiling operands  ------------------------------------------------------ *)
 
@@ -332,7 +337,7 @@ let mk_lbl (fn:string) (l:string) = fn ^ "." ^ l
 *)
 let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
   let stack_teardown = (Movq, [Reg Rbp; Reg Rsp]) :: (Popq, [Reg Rbp] )::(Retq, [])::[]
-  and compile_mov src_ll dest_86 = compile_operand ctxt dest_86 src_ll
+  and compile_mov src_ll dest_86 = compile_operand ctxt.layout dest_86 src_ll
   and ind1_of_lbl lbl = Ind1(Lbl (mk_lbl fn lbl))
   in
   match t with
@@ -351,8 +356,8 @@ let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
    [ctxt] - the current context
    [blk]  - LLVM IR code for the block
 *)
-let compile_block (fn:string) (ctxt:ctxt) ({insns; term = (_,term)}:Ll.block) : ins list =
-  List.concat_map (compile_insn ctxt) insns @ compile_terminator fn ctxt term
+let compile_block (fn:string) (ctxt:ctxt) (blk:Ll.block) : ins list =
+   (List.concat_map (compile_insn ctxt) blk.insns) @ (compile_terminator fn ctxt (snd blk.term))
 
 
 let compile_lbl_block fn lbl ctxt blk : elem =
@@ -445,7 +450,7 @@ let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_ty; f_param; f_cfg
       layout |> List.map (fun (u, instr) -> u ^ (string_of_operand instr)) |> String.concat "\n" |> String.cat "layout: \n"  |> print_endline
       else ();
 
-    [Asm.text name (stack_setup @ arguments_alloc @ first_block)] @ tail_blocks
+    [Asm.text (Platform.mangle name) (stack_setup @ arguments_alloc @ first_block)] @ tail_blocks
 (* compile_gdecl ------------------------------------------------------------ *)
               (*TODO: give functions names*)
 (* compile_gdecl ------------------------------------------------------------ *)
