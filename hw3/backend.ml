@@ -178,7 +178,6 @@ let rec size_ty (tdecls:(tid * ty) list) : Ll.ty -> int = function
   | Array (i, t) -> i * size_ty tdecls t
   | Namedt tid -> size_ty tdecls @@ lookup tdecls tid
 
-
 (* Generates code that computes a pointer value.
 
    1. op must be of pointer type: t*
@@ -204,40 +203,44 @@ let rec size_ty (tdecls:(tid * ty) list) : Ll.ty -> int = function
       in (4), but relative to the type f the sub-element picked out
       by the path so far
 *)
-let rec scanl (f : 'b -> 'a -> 'b) (q : 'b) (ls : 'a list) : 'b list = q :: (match ls with
-    | [] -> []
-    | x::xs -> scanl f (f q x) xs)
 
-let compile_gep ({layout; tdecls}:ctxt) (ptr_t,ptr : Ll.ty * Ll.operand) (path: Ll.operand list) : ins list =
-  let inner_ptr_t = match ptr_t with
-    | Ptr (Namedt lbl) -> lookup tdecls lbl (*TODO is this necessary?*)
-    | Ptr t -> t
-    | _ -> raise (Failure "gep takes a pointer")
-  in
-  let get_ty (t:Ll.ty) (op:Ll.operand) : Ll.ty =
-    match t,op with
-    | Struct ts, Const m -> List.nth ts @@ Int64.to_int m
-    | Array (_, t), _ -> t
-    | _ -> raise (Failure "gep only indexes into structs and arrays")
-  in
-  (* `take` drops last element *)
-  let path_ts = take (List.length path) @@ scanl get_ty inner_ptr_t path in
+let rec scanl (f : 'b -> 'a -> 'b) (q : 'b) (ls : 'a list) : 'b list =
+  q :: (match ls with [] -> [] | x::xs -> scanl f (f q x) xs)
 
-  [compile_operand layout (Reg Rax) ptr]
-  @ (List.flatten @@ List.map2 (fun (t:Ll.ty) (op:Ll.operand) ->
-      match t, op with
-      | Struct ts, Const m ->
-        let offset = List.fold_left (+) 0 @@ List.map (size_ty tdecls) @@ take (Int64.to_int m) ts in
-        [Addq, [Imm (Lit (Int64.of_int offset)); Reg Rax]]
-      | Array (_, elem_t), _ ->
-        let elemsize = size_ty tdecls elem_t in
-        [ compile_operand layout (Reg Rcx) op
-        ; Imulq, [Imm (Lit (Int64.of_int elemsize)); Reg Rcx]
-        ; Addq, [Reg Rcx; Reg Rax]
-        ]
-      | _ -> raise (Failure "won't happen")
-    ) path_ts path)
+let resolve_once (tdecls:(tid*Ll.ty) list) : Ll.ty -> Ll.ty =
+  function Namedt tid -> lookup tdecls tid | t -> t
 
+let get_ty (tdecls:(tid*Ll.ty) list) (t:Ll.ty) (op:Ll.operand) : Ll.ty =
+  match resolve_once tdecls t, op with
+  | Struct ts, Const m -> List.nth ts @@ Int64.to_int m
+  | Array (_, t), _ -> t
+  | _ -> raise (Failure "gep only indexes into structs and arrays")
+
+let compile_gep_step ({layout;tdecls}:ctxt) (t:Ll.ty) (op:Ll.operand): ins list =
+  match resolve_once tdecls t, op with
+  | Struct ts, Const m ->
+    let offset = List.fold_left (+) 0 @@ List.map (size_ty tdecls) @@ take (Int64.to_int m) ts in
+    [Addq, [Imm (Lit (Int64.of_int offset)); Reg Rax]]
+  | Array (_, elem_t), _ ->
+    let elemsize = size_ty tdecls elem_t in
+    [ compile_operand layout (Reg Rcx) op
+    ; Imulq, [Imm (Lit (Int64.of_int elemsize)); Reg Rcx]
+    ; Addq, [Reg Rcx; Reg Rax]
+    ]
+  | _ -> raise (Failure ("won't happen"))
+
+let compile_gep ({layout; tdecls} as ctxt:ctxt) (ptr_t,ptr : Ll.ty * Ll.operand) (path: Ll.operand list) : ins list =
+  let p,ps = match path with p::ps -> p,ps | _ ->
+    raise (Failure "gep can't take a non-empty path") in
+  let data_t = match resolve_once tdecls ptr_t with Ptr t -> t | _ ->
+    raise (Failure "gep takes a pointer") in
+  let path_ts = take (List.length ps) @@ scanl (get_ty tdecls) data_t ps in
+  [ compile_operand layout (Reg Rax) ptr
+  ; compile_operand layout (Reg Rcx) p
+  ; Imulq, [Imm (Lit (Int64.of_int (size_ty tdecls data_t))); Reg Rcx]
+  ; Addq, [Reg Rcx; Reg Rax]
+  ]
+  @ List.flatten (List.map2 (compile_gep_step ctxt) path_ts ps)
 
 (* compiling instructions  -------------------------------------------------- *)
 
@@ -271,17 +274,17 @@ let compile_insn ({tdecls; layout} as ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.
     ; compile_operand layout (Reg Rcx) op2
     ] @
     (match bop with
-     | Add -> [Addq, [Reg Rax; Reg Rcx]]
-     | Sub -> [Subq, [Reg Rax; Reg Rcx]]
-     | Mul -> [Imulq, [Reg Rax; Reg Rcx]]
-     | Shl -> [Shlq, [Reg Rax; Reg Rcx]]
-     | Lshr -> [Shrq, [Reg Rax; Reg Rcx]]
-     | Ashr -> [Sarq, [Reg Rax; Reg Rcx]]
-     | And -> [Andq, [Reg Rax; Reg Rcx]]
-     | Or -> [Orq, [Reg Rax; Reg Rcx]]
-     | Xor -> [Xorq, [Reg Rax; Reg Rcx]]
+     | Add -> [Addq, [Reg Rcx; Reg Rax]]
+     | Sub -> [Subq, [Reg Rcx; Reg Rax]]
+     | Mul -> [Imulq, [Reg Rcx; Reg Rax]]
+     | Shl -> [Shlq, [Reg Rcx; Reg Rax]]
+     | Lshr -> [Shrq, [Reg Rcx; Reg Rax]]
+     | Ashr -> [Sarq, [Reg Rcx; Reg Rax]]
+     | And -> [Andq, [Reg Rcx; Reg Rax]]
+     | Or -> [Orq, [Reg Rcx; Reg Rax]]
+     | Xor -> [Xorq, [Reg Rcx; Reg Rax]]
     ) @
-    [Movq, [Reg Rcx; dest]]
+    [Movq, [Reg Rax; dest]]
   | Alloca t ->
     [Subq, [Imm (Lit (Int64.of_int (size_ty tdecls t))); Reg Rsp]] @
     [Movq, [Reg Rsp; dest]]
@@ -297,7 +300,7 @@ let compile_insn ({tdecls; layout} as ctxt:ctxt) ((uid:uid), (i:Ll.insn)) : X86.
     [ Movq, [Imm (Lit 0L); dest]
     ; compile_operand layout (Reg Rax) op1
     ; compile_operand layout (Reg Rcx) op2
-    ; Cmpq, [Reg Rax; Reg Rcx]
+    ; Cmpq, [Reg Rcx; Reg Rax]
     ; Set (compile_cnd cnd), [dest]
     ]
   | Call (_, op, args) -> compile_call layout dest op args
@@ -362,7 +365,7 @@ let compile_terminator (fn:string) (layout:layout) : Ll.terminator -> ins list =
    [blk]  - LLVM IR code for the block
 *)
 let compile_block (fn:string) (ctxt:ctxt) ({insns; term = (_,term)}:Ll.block) : ins list =
-  List.concat_map (compile_insn ctxt) insns @ compile_terminator fn ctxt term
+  List.concat_map (compile_insn ctxt) insns @ compile_terminator fn ctxt.layout term
 
 
 let compile_lbl_block fn lbl ctxt blk : elem =
@@ -423,35 +426,19 @@ let stack_layout (args : uid list) ((entry_block, lbl_blocks):cfg) : layout =
    - the function entry code should allocate the stack storage needed
      to hold all of the local stack slots.
 *)
-let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({f_param; f_cfg; _}:fdecl) : prog =
-  let layout = stack_layout f_param f_cfg in
-  let size = Int64.of_int (8 * List.length layout) in
-  let aux (index:int) (uid:uid) : ins list = [Movq, [arg_loc index; Reg R10]; Movq, [Reg R10; lookup layout uid] ]in
-  let rbp_frame_prefix =
-    [ Pushq, [Reg Rbp]
+let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({f_param; f_cfg = entryblk, blks; _}:fdecl) : prog =
+  let {layout; _} as ctxt = {tdecls; layout = stack_layout f_param (entryblk,blks) }in
+  Asm.gtext (Platform.mangle name)
+    ([ Pushq, [Reg Rbp]
     ; Movq, [Reg Rsp; Reg Rbp]
-    ; Subq, [Imm (Lit size); Reg Rsp]
-    ] @
-    List.concat (List.mapi aux f_param) in
-  let ctxt = {tdecls = tdecls; layout = layout} in
-  let entry_elem = Asm.gtext (Platform.mangle name) (rbp_frame_prefix @ compile_block name ctxt (fst f_cfg)) in
-  let auxx ((lbl, blk): (lbl * block)) : elem = compile_lbl_block name (Platform.mangle lbl) ctxt blk in
-  (*print_endline (string_of_prog (entry_elem :: List.map auxx (snd f_cfg)));*)
-  entry_elem :: List.map auxx (snd f_cfg)
-
-  (* let layout = stack_layout f_param f_cfg in *)
-  (*   let ctxt = {tdecls = tdecls; layout = layout} in *)
-  (*     let stack_setup = (Pushq, [Reg Rbp]) :: (Movq, [Reg Rsp; Reg Rbp])::[] *)
-  (*     and arguments_alloc = *)
-  (*         List.mapi (fun inx u -> (Movq , [(arg_loc inx);  lookup layout u]))  f_param  (\* optimize *\) *)
-  (*     and first_block = compile_block name ctxt (fst f_cfg) *)
-  (*     and tail_blocks = List.map (fun (lbl, blk) -> compile_lbl_block name lbl ctxt blk) (snd f_cfg) *)
-  (*   in *)
-  (*   if !debug_backend then *)
-  (*     layout |> List.map (fun (u, instr) -> u ^ (string_of_operand instr)) |> String.concat "\n" |> String.cat "layout: \n"  |> print_endline *)
-  (*     else (); *)
-
-  (*   [Asm.text (Platform.mangle name) (stack_setup @ arguments_alloc @ first_block)] @ tail_blocks *)
+    ; Subq, [Imm (Lit (Int64.of_int (List.length layout * 8))); Reg Rsp]
+    ]
+    @ (List.flatten @@ List.mapi (fun i uid->
+        [ Movq, [arg_loc i; Reg Rax]
+        ; Movq, [Reg Rax; lookup layout uid]
+        ]) f_param)
+    @ compile_block name ctxt entryblk)
+  :: List.map (fun (lbl,b)-> compile_lbl_block name (Platform.mangle lbl) ctxt b) blks
 
 (* compile_gdecl ------------------------------------------------------------ *)
               (*TODO: give functions names*)
