@@ -330,18 +330,28 @@ let mk_lbl (fn:string) (l:string) = fn ^ "." ^ l
 
    [fn] - the name of the function containing this terminator
 *)
-let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
-  let stack_teardown = (Movq, [Reg Rbp; Reg Rsp]) :: (Popq, [Reg Rbp] )::(Retq, [])::[]
-  and compile_mov src_ll dest_86 = compile_operand ctxt.layout dest_86 src_ll
-  and ind1_of_lbl lbl = Ind1(Lbl (mk_lbl fn lbl))
-  in
-  match t with
-  | Ret (_, None) -> stack_teardown
-  | Ret (_, Some res) ->   [compile_mov res (Reg Rax)] @ stack_teardown
-  | Br label -> [(Jmp, [ind1_of_lbl label])]
-  | Cbr (op, label1, label2) -> [compile_mov op (Reg R08); (Cmpq, [Imm (Lit 0L); Reg R08]);
-                                  ((J Neq), [ind1_of_lbl label1]); (J Eq, [ind1_of_lbl label2])]
-
+let compile_terminator (fn:string) (layout:layout) : Ll.terminator -> ins list = function
+  | Ret (Void, _) ->
+    [ Movq, [Reg Rbp; Reg Rsp]
+    ; Popq, [Reg Rbp]
+    ; Retq, []
+    ]
+  | Ret (_, Some op) ->
+    [ compile_operand layout (Reg Rax) op
+    ; Movq, [Reg Rbp; Reg Rsp]
+    ; Popq, [Reg Rbp]
+    ; Retq, []
+    ]
+  | Cbr (op, l1, l2)  ->
+    [ compile_operand layout (Reg Rax) op
+    ; Cmpq, [(Imm (Lit (1L))); (Reg Rax)]
+    ; J Eq, [(Imm (Lbl (mk_lbl fn (Platform.mangle l1))))]
+    ; Jmp, [(Imm (Lbl (mk_lbl fn (Platform.mangle l2))))]
+    ]
+  | Br l ->
+    [ Jmp, [Imm (Lbl (mk_lbl fn (Platform.mangle l)))]
+    ]
+  | _ -> raise (Failure "invalid terminator")
 
 
 (* compiling blocks --------------------------------------------------------- *)
@@ -392,28 +402,10 @@ let arg_loc (n : int) : operand =
 
 *)
 
-
-let create_layout_entry uid offset =  (uid, (Ind3 (Lit( Int64.of_int offset), Rbp)))
-
-
-let stack_layout (args : uid list) ((block, lbled_blocks):cfg) : layout =
-  let args_layout = List.mapi (fun n u ->  create_layout_entry u (-(n+1) * 8) ) args in
-
-    let cntr =  ref (List.length args_layout) in (* this is suspicious*)
-
-    let layout_block ({insns = insns; term = (tuid, term)}:block):layout =
-
-      let block_layout_init = List.mapi ( fun  n (u, instr) ->  create_layout_entry u (-(n + 1 + !cntr)*8 ) ) insns in
-        let _ = cntr:= !cntr + List.length insns + 1 in
-
-            let block_layout_fin = block_layout_init @ [( create_layout_entry tuid (!cntr * -8 ))] in (* putting the terminator result onto stack slot. May be unnecessary*)
-                    block_layout_fin
-          in
-          args_layout @ (layout_block block) @ (List.concat_map (fun (lbl, blk) -> layout_block blk )  lbled_blocks)
-
-
-
-
+let stack_layout (args : uid list) ((entry_block, lbl_blocks):cfg) : layout =
+  let _, blocks = List.split lbl_blocks in
+  let blockuids = List.concat_map (fun {insns; term = uid,_ }-> List.map fst insns @ [uid]) (entry_block :: blocks) in
+  List.mapi (fun i uid-> (uid, Ind3 (Lit (Int64.of_int (-i*8 - 8)), Rbp))) (args @ blockuids)
 
 (* The code for the entry-point of a function must do several things:
 
@@ -431,21 +423,36 @@ let stack_layout (args : uid list) ((block, lbled_blocks):cfg) : layout =
    - the function entry code should allocate the stack storage needed
      to hold all of the local stack slots.
 *)
-let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({ f_ty; f_param; f_cfg }:fdecl) : prog =
-
+let compile_fdecl (tdecls:(tid * ty) list) (name:string) ({f_param; f_cfg; _}:fdecl) : prog =
   let layout = stack_layout f_param f_cfg in
-    let ctxt = {tdecls = tdecls; layout = layout} in
-      let stack_setup = (Pushq, [Reg Rbp]) :: (Movq, [Reg Rsp; Reg Rbp])::[]
-      and arguments_alloc =
-          List.mapi (fun inx u -> (Movq , [(arg_loc inx);  lookup layout u]))  f_param  (* optimize *)
-      and first_block = compile_block name ctxt (fst f_cfg)
-      and tail_blocks = List.map (fun (lbl, blk) -> compile_lbl_block name lbl ctxt blk) (snd f_cfg)
-    in
-    if !debug_backend then
-      layout |> List.map (fun (u, instr) -> u ^ (string_of_operand instr)) |> String.concat "\n" |> String.cat "layout: \n"  |> print_endline
-      else ();
+  let size = Int64.of_int (8 * List.length layout) in
+  let aux (index:int) (uid:uid) : ins list = [Movq, [arg_loc index; Reg R10]; Movq, [Reg R10; lookup layout uid] ]in
+  let rbp_frame_prefix =
+    [ Pushq, [Reg Rbp]
+    ; Movq, [Reg Rsp; Reg Rbp]
+    ; Subq, [Imm (Lit size); Reg Rsp]
+    ] @
+    List.concat (List.mapi aux f_param) in
+  let ctxt = {tdecls = tdecls; layout = layout} in
+  let entry_elem = Asm.gtext (Platform.mangle name) (rbp_frame_prefix @ compile_block name ctxt (fst f_cfg)) in
+  let auxx ((lbl, blk): (lbl * block)) : elem = compile_lbl_block name (Platform.mangle lbl) ctxt blk in
+  (*print_endline (string_of_prog (entry_elem :: List.map auxx (snd f_cfg)));*)
+  entry_elem :: List.map auxx (snd f_cfg)
 
-    [Asm.text (Platform.mangle name) (stack_setup @ arguments_alloc @ first_block)] @ tail_blocks
+  (* let layout = stack_layout f_param f_cfg in *)
+  (*   let ctxt = {tdecls = tdecls; layout = layout} in *)
+  (*     let stack_setup = (Pushq, [Reg Rbp]) :: (Movq, [Reg Rsp; Reg Rbp])::[] *)
+  (*     and arguments_alloc = *)
+  (*         List.mapi (fun inx u -> (Movq , [(arg_loc inx);  lookup layout u]))  f_param  (\* optimize *\) *)
+  (*     and first_block = compile_block name ctxt (fst f_cfg) *)
+  (*     and tail_blocks = List.map (fun (lbl, blk) -> compile_lbl_block name lbl ctxt blk) (snd f_cfg) *)
+  (*   in *)
+  (*   if !debug_backend then *)
+  (*     layout |> List.map (fun (u, instr) -> u ^ (string_of_operand instr)) |> String.concat "\n" |> String.cat "layout: \n"  |> print_endline *)
+  (*     else (); *)
+
+  (*   [Asm.text (Platform.mangle name) (stack_setup @ arguments_alloc @ first_block)] @ tail_blocks *)
+
 (* compile_gdecl ------------------------------------------------------------ *)
               (*TODO: give functions names*)
 (* compile_gdecl ------------------------------------------------------------ *)
@@ -458,13 +465,13 @@ let rec compile_ginit : ginit -> X86.data list = function
   | GInt c    -> [Quad (Lit c)]
   | GString s -> [Asciz s]
   | GArray gs | GStruct gs -> List.map compile_gdecl gs |> List.flatten
-  | GBitcast (t1,g,t2) -> compile_ginit g
+  | GBitcast (_,g,_) -> compile_ginit g
 
 and compile_gdecl (_, g) = compile_ginit g
 
 
 (* compile_prog ------------------------------------------------------------- *)
-let compile_prog {tdecls; gdecls; fdecls} : X86.prog =
+let compile_prog {tdecls; gdecls; fdecls; _} : X86.prog =
   let g = fun (lbl, gdecl) -> Asm.data (Platform.mangle lbl) (compile_gdecl gdecl) in
   let f = fun (name, fdecl) -> compile_fdecl tdecls name fdecl in
   (List.map g gdecls) @ (List.map f fdecls |> List.flatten)
