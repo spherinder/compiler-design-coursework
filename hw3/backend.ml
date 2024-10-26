@@ -61,7 +61,7 @@ type ctxt = { tdecls : (tid * ty) list
 (* useful for looking up items in tdecls or layouts *)
 let lookup m x = List.assoc x m
 
-let todo = failwith "todo"
+let todo() = failwith "todo"
 
 (* compiling operands  ------------------------------------------------------ *)
 
