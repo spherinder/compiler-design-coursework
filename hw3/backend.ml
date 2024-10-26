@@ -61,16 +61,7 @@ type ctxt = { tdecls : (tid * ty) list
 (* useful for looking up items in tdecls or layouts *)
 let lookup m x = List.assoc x m
 
-<<<<<<< HEAD
 let todo = failwith "todo"
-=======
-(* let todo = failwith "todo" *)
-(*custom helpers*)
-let get_layout (ctxt:ctxt) =
-  match ctxt with {layout = l} -> l
-let get_tdecls (ctxt:ctxt) =
-  match ctxt with {tdecls = t} -> t
->>>>>>> 23af52e (version before pulling)
 
 (* compiling operands  ------------------------------------------------------ *)
 
@@ -360,13 +351,8 @@ let compile_terminator (fn:string) (ctxt:ctxt) (t:Ll.terminator) : ins list =
    [ctxt] - the current context
    [blk]  - LLVM IR code for the block
 *)
-<<<<<<< HEAD
 let compile_block (fn:string) (ctxt:ctxt) ({insns; term = (_,term)}:Ll.block) : ins list =
   List.concat_map (compile_insn ctxt) insns @ compile_terminator fn ctxt term
-=======
-let compile_block (fn:string) (ctxt:ctxt) (blk:Ll.block) : ins list =
-   (List.concat_map (compile_insn ctxt) blk.insns) @ (compile_terminator fn ctxt (snd blk.term))
->>>>>>> 23af52e (version before pulling)
 
 
 let compile_lbl_block fn lbl ctxt blk : elem =
