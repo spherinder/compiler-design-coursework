@@ -168,14 +168,14 @@ let tests : suite =
   [ GradedTest("size_ty tests", 5, size_ty_tests)
   ; GradedTest("arg_loc tests", 5, arg_loc_tests)
   ; GradedTest("executed binop tests", 5, executed binop_tests)
-  (* ; GradedTest("terminator tests", 10, executed terminator_tests)
+  ; GradedTest("terminator tests", 10, executed terminator_tests)
   ; GradedTest("memory tests", 10, executed memory_tests)
   ; GradedTest("calling convention tests", 15, executed calling_convention_tests)
   ; GradedTest("bitcast tests", 2, executed bitcast_tests)
   ; GradedTest("gep tests", 10, executed gep_tests)
   ; GradedTest("large tests", 10, executed large_tests)
   ; GradedTest("hidden large tests", 18, hidden_large_tests)
-  ; GradedTest("io tests", 10, executed_io io_tests) *)
+  ; GradedTest("io tests", 10, executed_io io_tests)
   ]
 
 
