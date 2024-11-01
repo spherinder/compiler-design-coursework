@@ -1,0 +1,18 @@
+(executable
+ (name main)
+ (libraries unix str num))
+
+
+(ocamllex
+  (modules lexer))
+
+(menhir
+  (modules parser))
+
+(env
+(dev
+(flags (:standard -warn-error -A -no-strict-formats))))
+
+(include_subdirs unqualified)
+
+
