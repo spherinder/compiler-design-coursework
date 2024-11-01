@@ -11,7 +11,8 @@
         default = pkgs.mkShell {
           buildInputs = with pkgs; [
             gnumake
-            clang
+            # pkgs.llvmPackages_9.clang    # Use clang from LLVM 9 package
+            clang_12
             ocaml-ng.ocamlPackages_4_13.ocaml
             ocaml-ng.ocamlPackages_4_13.ocamlbuild
             ocaml-ng.ocamlPackages_4_13.menhir
