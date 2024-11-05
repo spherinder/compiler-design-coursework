@@ -16,6 +16,7 @@ let loc (startpos:Lexing.position) (endpos:Lexing.position) (elt:'a) : 'a node =
 %token TINT     /* int */
 %token TVOID    /* void */
 %token TSTRING  /* string */
+%token TBOOL    /* bool */
 %token IF       /* if */
 %token ELSE     /* else */
 %token WHILE    /* while */
@@ -37,9 +38,35 @@ let loc (startpos:Lexing.position) (endpos:Lexing.position) (elt:'a) : 'a node =
 %token TILDE    /* ~ */
 %token BANG     /* ! */
 %token GLOBAL   /* global */
+%token FOR      /* for */
+%token TRUE     /* true */
+%token FALSE    /* false */
+%token LT       /* < */
+%token GT       /* > */
+%token LTE      /* <= */
+%token GTE      /* >= */
+%token NEQ      /* != */
+%token SHL      /* << */
+%token SHR      /* >> */
+%token SAR      /* >>> */
+%token AND      /* & */
+%token OR       /* | */
+%token IAND     /* [&] */
+%token IOR      /* [|] */
+%token NEW      /* new */
+%token ARR_BR   /* [] */
 
+/* order matters! */
+%left IOR
+%left IAND
+%left OR
+%left AND
+%left NEQ EQEQ
+%left LT LTE GT GTE
+%left SHL SHR SAR
 %left PLUS DASH
 %left STAR
+
 %nonassoc BANG
 %nonassoc TILDE
 %nonassoc LBRACKET
@@ -80,6 +107,7 @@ arglist:
     
 ty:
   | TINT   { TInt }
+  | TBOOL  { TBool }
   | r=rtyp { TRef r } 
 
 %inline ret_ty:
@@ -88,13 +116,25 @@ ty:
 
 %inline rtyp:
   | TSTRING { RString }
-  | t=ty LBRACKET RBRACKET { RArray t }
+  | t=ty ARR_BR { RArray t }
 
 %inline bop:
+  | STAR   { Mul }
   | PLUS   { Add }
   | DASH   { Sub }
-  | STAR   { Mul }
+  | SHL    { Shl }
+  | SHR    { Shr }
+  | SAR    { Sar }
+  | LT     { Lt }
+  | LTE    { Lte }
+  | GT     { Gt }
+  | GTE    { Gte }
   | EQEQ   { Eq }
+  | NEQ    { Neq }
+  | AND    { And }
+  | OR     { Or }
+  | IAND   { IAnd }
+  | IOR    { IOr }
 
 %inline uop:
   | DASH  { Neg }
@@ -103,8 +143,12 @@ ty:
 
 gexp:
   | t=rtyp NULL  { loc $startpos $endpos @@ CNull t }
-  | i=INT      { loc $startpos $endpos @@ CInt i }
-
+  | i=INT        { loc $startpos $endpos @@ CInt i }
+  | TRUE         { loc $startpos $endpos @@ CBool true }
+  | FALSE        { loc $startpos $endpos @@ CBool false }
+  | s=STRING     { loc $startpos $endpos @@ CStr s }
+  | NEW t=ty ARR_BR LBRACE es=separated_list(COMMA, gexp) RBRACE
+                 { loc $startpos $endpos @@ CArr (t,es) }
 lhs:  
   | id=IDENT            { loc $startpos $endpos @@ Id id }
   | e=exp LBRACKET i=exp RBRACKET
@@ -120,7 +164,16 @@ exp:
                         { loc $startpos $endpos @@ Index (e, i) }
   | e=exp LPAREN es=separated_list(COMMA, exp) RPAREN
                         { loc $startpos $endpos @@ Call (e,es) }
-  | LPAREN e=exp RPAREN { e } 
+  | LPAREN e=exp RPAREN { e }
+  | TRUE                { loc $startpos $endpos @@ CBool true }
+  | FALSE               { loc $startpos $endpos @@ CBool false }
+  | s=STRING            { loc $startpos $endpos @@ CStr s }
+  | NEW t=ty ARR_BR LBRACE es=separated_list(COMMA, exp) RBRACE
+                        { loc $startpos $endpos @@ CArr (t,es) }
+  | NEW TINT LBRACKET e=exp RBRACKET
+                        { loc $startpos $endpos @@ NewArr (TInt,e) }
+  | NEW TBOOL LBRACKET e=exp RBRACKET
+                        { loc $startpos $endpos @@ NewArr (TBool,e) }
 
 vdecl:
   | VAR id=IDENT EQ init=exp { (id, init) }
@@ -134,7 +187,9 @@ stmt:
   | RETURN SEMI         { loc $startpos $endpos @@ Ret(None) }
   | RETURN e=exp SEMI   { loc $startpos $endpos @@ Ret(Some e) }
   | WHILE LPAREN e=exp RPAREN b=block  
-                        { loc $startpos $endpos @@ While(e, b) } 
+                        { loc $startpos $endpos @@ While(e, b) }
+  | FOR LPAREN vs=separated_list(COMMA, vdecl) SEMI e=exp? SEMI s=stmt? RPAREN b=block
+                        { loc $startpos $endpos @@ For(vs, e, s, b) }
 
 block:
   | LBRACE stmts=list(stmt) RBRACE { stmts }
@@ -147,3 +202,6 @@ else_stmt:
   | (* empty *)       { [] }
   | ELSE b=block      { b }
   | ELSE ifs=if_stmt  { [ ifs ] }
+
+/* %% */
+/* let print_token = _menhir_print_token */
