@@ -135,8 +135,6 @@ let compare_block (b:block) (c:block) : int =
     {insns=List.map del_dummy b.insns; term=del_term b.term}
     {insns=List.map del_dummy c.insns; term=del_term c.term}
 
-
-
 (* helper module for AST ------------------------------------------------------ *)
 
 module IR = struct

@@ -337,8 +337,8 @@ in
     ] 
   | CNull rty -> Ptr(cmp_rty rty), Id !ret_reg, 
       [
-        E (!ret_reg, Alloca Ptr (cmp_rty rty)); 
-        I (gensym "tmp", Store (Ptr (cmp_rty rty) , Null, Id !ret_reg));
+        E (!stack_reg, Alloca Ptr (cmp_rty rty)); 
+        I (gensum "tmp", Store (Ptr (cmp_rty rty) , Null, Id lbl1));
       ] 
   | Gstr str -> let global_id =  ref (gensym "str") 
       and interm_reg = ref (gensym "tmp") in
@@ -357,21 +357,22 @@ in
     ll_ty1, (Id !ret_reg) , (stream1 @ stream2 @ 
     [
       I(!op1_reg, Load (ll_ty1, op1) ); I(!op2_reg, Load (ll_ty2, op2));
-      I(!res_reg, cmp_bop binop (Id !op1_reg) (Id !op2_reg));
+      I(!res_reg, cmp_bop binop (Id op1_reg) (Id op2_reg));
       I(gensym "tmp", Store ll_ty1, (Id !res_reg), (Id !ret_reg));
     ])
 
   | Uop unop exp -> 
-    let ll_ty, op, stream = cmp_exp exp in 
-    ll_ty, Id !ret_reg, (stream @
+    let ll_ty, op, stream = cmp_exp exp
+     
+  in
+    ll_ty, (Id !ret_reg), (stream @
     [
-      E(!op1_reg, Load(ll_ty, op));
-      I(!res_reg, cmp_uop uop (Id !op1_reg));
-      I(gensym "tmp", Store (ll_ty, (Id !res_reg), (Id !ret_reg)))
-    ])
-  | Id id -> 
-    
-  | Call exp, func 
+      I(!op1_reg, Load( ll_ty, op));
+      I(!res_reg, cmp_uop ll_ty (Id !op1_reg));
+      I( gensym "tmp", Store ll_ty, (Id !res_reg), (Id !ret_reg))
+    ]
+    )
+  | Call 
 
 
     
@@ -574,3 +575,4 @@ let cmp_prog (p:Ast.prog) : Ll.prog =
   (* gather external declarations *)
   let edecls = internals @ builtins in
   { tdecls = []; gdecls; fdecls; edecls }
+
