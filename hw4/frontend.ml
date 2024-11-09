@@ -316,69 +316,111 @@ statement.
    
 *)
 
+
+let cmp_bop (bop: Ast.binop) (op1: Ll.operand) (op2: Ll.operand) (res_reg: string): Ll.ty * stream  = 
+  match bop with
+  |Ast.Add ->  (I64, [I(res_reg, Binop (Add, I64, op1, op2))])
+  |Ast.Sub ->  (I64, [I(res_reg, Binop (Sub, I64, op1, op2))])
+  |Ast.Mul->  (I64, [I(res_reg, Binop (Mul, I64, op1, op2))])
+  |Ast.Shl -> (I64, [I(res_reg, Binop (Shl, I64, op1, op2))]) 
+  |Ast.Shr -> (I64, [I(res_reg, Binop (Lshr, I64, op1, op2))]) 
+  |Ast.Sar -> (I64, [I(res_reg, Binop (Ashr, I64, op1, op2))]) 
+  |Ast.Lt -> (I1, [I(res_reg, Icmp(Slt, I64, op1, op2))])
+  |Ast.Lte -> (I1, [I(res_reg, Icmp(Sle, I64, op1, op2))])
+  |Ast.Gt -> (I1, [I(res_reg, Icmp(Sgt, I64, op1, op2))])
+  |Ast.Gte -> (I1, [I(res_reg, Icmp(Sge, I64, op1, op2))])
+  |Ast.Eq -> (I1, [I(res_reg, Icmp(Eq, I64, op1, op2))])
+  |Ast.Neq -> (I1, [I(res_reg, Icmp(Ne, I64, op1, op2))])
+  |Ast.Or -> (I1, [I(res_reg, Binop (Or, I1, op1, op2))])
+  |Ast.And -> (I1, [I(res_reg, Binop(And, I1, op1, op2))])
+  |Ast.IAnd -> (I64, [I(res_reg, Binop(And, I64, op1, op2))])
+  |Ast.IOr -> (I64, [I(res_reg, Binop(Or, I64, op1, op2))])
+  
+let cmp_uop (uop: Ast.unop) (op1: Ll.operand) (res_reg:string) : Ll.ty * stream = 
+  match uop with
+  | Neg -> (I64, [I(res_reg, Binop(Sub, I64, Const 0L, op1))])
+  | Lognot -> (I1, [I(res_reg, Binop(Xor, I1, Const 1L, op1))])
+  | Bitnot -> (I64, [I(res_reg, Binop(Xor, I64, Const 1L, op1))])
+
 let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
-  let {elt = expr} = exp in
-  and op1_reg = ref (gensym "op_a")
-  and op2_reg = ref (gensym "op_b")
-  and res_reg = ref (gensym "result_bop")
-  and ret_reg = ref (gensym "return")
-  and stack_reg = ref (gensym "stack_ref")
+let {elt = expr} = exp 
+and op1_reg = ref (gensym "op_a")
+and op2_reg = ref (gensym "op_b")
+and res_reg = ref (gensym "result_bop")
+and ret_reg = ref (gensym "return")
+and stack_reg = ref (gensym "stack_ref")
 in 
-  match expr with
-  | CBool b -> I1, Id !ret_reg, 
+match expr with
+| CBool b -> I1, Id !ret_reg, 
+  [
+    E (!ret_reg, Alloca I1) ; 
+    I (gensym "tmp", Store (I1, b |> Bool.to_int |> Int64.of_int |> (fun a -> Const a) , Id !ret_reg )) 
+  ]
+| CInt num -> I64, Id !ret_reg, 
+  [
+    E (!ret_reg, Alloca I64); 
+    I (gensym "tmp", Store (I64, Const num , Id !ret_reg))
+  ] 
+| CNull rty -> Ptr(cmp_rty rty), Id !ret_reg, 
     [
-      E (!ret_reg, Alloca I1) ; 
-      I (gensym "tmp", Store (I1, b |> Bool.to_int |> Int64.of_int |> Const , Id !ret_reg )) 
-    ]
-  | CInt num -> I64, Id !ret_reg, 
-    [
-      E (!ret_reg, Alloca I64); 
-      I (gensym "tmp", Store (I64, Const num , Id !ret_reg))
-    ] 
-  | CNull rty -> Ptr(cmp_rty rty), Id !ret_reg, 
-      [
-        E (!ret_reg, Alloca Ptr (cmp_rty rty)); 
+      E (!ret_reg, Alloca (Ptr (cmp_rty rty))); 
         I (gensym "tmp", Store (Ptr (cmp_rty rty) , Null, Id !ret_reg));
       ] 
-  | Gstr str -> let global_id =  ref (gensym "str") 
+  | CStr str -> let global_id =  ref (gensym "str") 
       and interm_reg = ref (gensym "tmp") in
-
       Ptr( I8), (Id !ret_reg),
     [
       G (!global_id, (Array (String.length str + 1, I8),  GString str)); 
-      E (!ret_reg, Alloca Ptr(I8)); 
-      I (!interm_reg, GEP (I8, Gid !global_id, [Const 0L])) ;
+      E (!ret_reg, Alloca (Ptr(I8))); 
+      I (!interm_reg, Gep (I8, Gid !global_id, [Const 0L])) ;
       I (gensym "tmp", Store (Ptr(I8), Id !interm_reg, Id !ret_reg))
     ] 
-  | Binop bonop exp1 exp2 -> 
-    let ll_ty1, op1, stream1 =  cmp_exp exp1
-    and ll_ty2, op2, stream2 =  cmp_exp exp2
-     in 
-    ll_ty1, (Id !ret_reg) , (stream1 @ stream2 @ 
-    [
-      I(!op1_reg, Load (ll_ty1, op1) ); I(!op2_reg, Load (ll_ty2, op2));
-      I(!res_reg, cmp_bop binop (Id !op1_reg) (Id !op2_reg));
-      I(gensym "tmp", Store ll_ty1, (Id !res_reg), (Id !ret_reg));
-    ])
+    
+  | Bop (binop, exp1, exp2) -> 
+    let ll_ty1, op1, stream1 =  cmp_exp c exp1
+    and ll_ty2, op2, stream2 =  cmp_exp c  exp2 in 
+     let ret_ty, binop_instr_stream = cmp_bop binop (Id !op1_reg) (Id !op2_reg) !res_reg
+    in
 
-  | Uop unop exp -> 
-    let ll_ty, op, stream = cmp_exp exp in 
-    ll_ty, Id !ret_reg, (stream @
-    [
-      E(!op1_reg, Load(ll_ty, op));
-      I(!res_reg, cmp_uop uop (Id !op1_reg));
-      I(gensym "tmp", Store (ll_ty, (Id !res_reg), (Id !ret_reg)))
-    ])
+    ret_ty, (Id !ret_reg) , (stream1 @ stream2 @ 
+    [I(!op1_reg, Load (ll_ty1, op1) ); I(!op2_reg, Load (ll_ty2, op2))] @
+    binop_instr_stream @ 
+    [I(gensym "tmp", Store (ll_ty1, (Id !res_reg), (Id !ret_reg)))]
+    )
+
+  | Uop (unop,exp) -> 
+    let ll_ty, op, stream = cmp_exp c exp in 
+    let ret_ty, unop_instr_stream = cmp_uop unop (Id !op1_reg) !res_reg
+  in
+    ret_ty, Id !ret_reg, (stream @
+    [I(!op1_reg, Load(ll_ty, op))] @
+    unop_instr_stream @ 
+    [I(gensym "tmp", Store (ll_ty, (Id !res_reg), (Id !ret_reg)))]
+    )
   | Id id -> 
-    
-  | Call exp, func 
-
-
-    
-
-     
-
-  
+      let ll_ty, ll_op = Ctxt.lookup id c in
+      ll_ty, Id !ret_reg, 
+      [
+        E(!op1_reg, Alloca ll_ty);
+        I(gensym "tmp", Store (ll_ty, ll_op, Id !ret_reg))
+      ]
+  | Call (f_expr, args) -> 
+      let ptr_ty, op_ptr, stream_ptr = cmp_exp c f_expr
+      and cmped_args = List.map (fun exp -> cmp_exp c exp) args in
+      let ty_id_load  = List.map (fun (ty, op, _ ) -> let arg_reg = ref (gensym "arg") in (ty, (Ll.Id !arg_reg), I(!arg_reg, Load (ty, op)) )) cmped_args
+  in 
+    let call_args = List.map (fun (ty, op, _) -> (ty, op)) ty_id_load 
+    and stream_load = List.map (fun (_, _, inst) -> inst) ty_id_load in
+    let fin_stream = stream_ptr @ 
+    (List.concat_map (fun (_, _, stream) -> stream) cmped_args) @
+    stream_load @
+    [
+      I( !ret_reg, Call (ptr_ty, op_ptr,call_args))
+    ]
+  in
+    let Ptr(fin_ty) = ptr_ty in
+    fin_ty, (Id !ret_reg), fin_stream
+      
 
 (* Compile a statement in context c with return type rt. Return a new context, 
    possibly extended with new local bindings, and the instruction stream
