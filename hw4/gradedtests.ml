@@ -144,8 +144,8 @@ let globals_tests = [
 ]
 
 let path_tests = [
- ("oatprograms/path1.oat", "", "17");
- ("oatprograms/path2.oat", "", "35");
+ ("oatprograms/path1.oat", "", "17"); 
+ ("oatprograms/path2.oat", "", "35"); 
  ("oatprograms/path3.oat", "", "3");
  ("oatprograms/arrayargs.oat", "", "17");
  ("oatprograms/arrayargs1.oat", "", "17");
@@ -212,12 +212,12 @@ let medium_tests = [
   ("oatprograms/lib4.oat", "", "53220");
   ("oatprograms/lib5.oat", "", "20");
   ("oatprograms/lib6.oat", "", "56553");
-  ("oatprograms/lib7.oat", "", "53");
+  ("oatprograms/lib7.oat", "", "53"); 
   ("oatprograms/lib8.oat", "", "Hello world!0");
   ("oatprograms/lib9.oat", "a b c d", "abcd5");
   ("oatprograms/lib11.oat", "", "45");
   ("oatprograms/lib14.oat", "", "~}|{zyxwvu0");
-  ("oatprograms/lib15.oat", "123456789", "456780");
+  ("oatprograms/lib15.oat", "123456789", "456780"); 
 ]
 
 let hard_tests = [
@@ -251,14 +251,15 @@ let old_student_tests = [
 let student_tests = [] 
 
 let tests : suite =
-  [ GradedTest("parse tests", 15, parse_tests);
+  [  GradedTest("parse tests", 15, parse_tests); 
     GradedTest("easiest tests", 15, executed_oat_file easiest_tests);
-    GradedTest("globals tests", 10, executed_oat_file globals_tests);
-    GradedTest("path tests", 10, executed_oat_file path_tests);
-    GradedTest("easy tests", 10, executed_oat_file easy_tests);
-    GradedTest("medium tests", 10, executed_oat_file medium_tests);
+   GradedTest("globals tests", 10, executed_oat_file globals_tests); 
+    GradedTest("path tests", 10, executed_oat_file path_tests); 
+    GradedTest("easy tests", 10, executed_oat_file easy_tests); 
+    GradedTest("medium tests", 10, executed_oat_file medium_tests); 
     GradedTest("hard tests", 10, executed_oat_file (hard_tests @ old_student_tests));
-    GradedTest("hidden tests", 20, executed_oat_file student_tests);
+    GradedTest("hidden tests", 20, executed_oat_file student_tests); 
+    
   ]
 
 let graded_tests : suite = tests

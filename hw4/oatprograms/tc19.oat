@@ -1,4 +1,4 @@
 int f(int x, int y) {return 0;}
-int g() {
+int program() {
   return f(0);
 }

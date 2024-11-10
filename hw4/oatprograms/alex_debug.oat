@@ -1,0 +1,6 @@
+
+int program(int argc, string[] argv) {
+    var a = (-10 << 3);
+    print_int(a);
+    return a;
+}

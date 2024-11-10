@@ -2,6 +2,8 @@ open Ll
 open Llutil
 open Ast
 
+
+
 (* instruction streams ------------------------------------------------------ *)
 
 (* As in the last project, we'll be working with a flattened representation
@@ -15,7 +17,7 @@ open Ast
      to the entry block of the current function. This will be useful for 
      compiling local variable declarations
 *)
-
+let debug = ref false  
 type elt = 
   | L of Ll.lbl             (* block labels *)
   | I of uid * Ll.insn      (* instruction *)
@@ -53,6 +55,18 @@ let cfg_of_stream (code:stream) : Ll.cfg * (Ll.gid * Ll.gdecl) list  =
     | Some term -> 
        let insns = einsns @ insns in
        ({insns; term}, blks), gs
+(*printing helpers ---------------------------------------------------------- *)
+
+let string_of_elt (elt:elt) = 
+  match elt with
+  |L lbl -> lbl
+  | E (uid, term)  -> Llutil.string_of_named_insn (uid, term)
+  | I (uid, term)  -> Llutil.string_of_named_insn (uid, term)
+  | G (gid, decl) -> gid ^ " " ^ Llutil.string_of_gdecl decl
+  | T term -> Llutil.string_of_terminator term
+
+let string_of_stream stream = String.concat "\n" @@ List.map (fun elt -> (string_of_elt elt)) stream
+  
 
 
 (* compilation contexts ----------------------------------------------------- *)
@@ -340,7 +354,7 @@ let cmp_uop (uop: Ast.unop) (op1: Ll.operand) (res_reg:string) : Ll.ty * stream 
   match uop with
   | Neg -> (I64, [I(res_reg, Binop(Sub, I64, Const 0L, op1))])
   | Lognot -> (I1, [I(res_reg, Binop(Xor, I1, Const 1L, op1))])
-  | Bitnot -> (I64, [I(res_reg, Binop(Xor, I64, Const 1L, op1))])
+  | Bitnot -> (I64, [I(res_reg, Binop(Xor, I64, (1L |> Int64.neg |>  (fun i -> Const i)) , op1))])
 
 let rec cmp_exp (c:Ctxt.t) (exp:Ast.exp node) : Ll.ty * Ll.operand * stream =
 let {elt = expr} = exp 
@@ -364,15 +378,15 @@ match expr with
 | CNull rty -> Ptr(cmp_rty rty), Id !ret_reg, 
     [
       E (!ret_reg, Alloca (Ptr (cmp_rty rty))); 
-        I (gensym "tmp", Store (Ptr (cmp_rty rty) , Null, Id !ret_reg));
+        I (gensym "tmp", Store (Ptr (cmp_rty rty) , Null, Id !ret_reg))
       ] 
   | CStr str -> let global_id =  ref (gensym "str") 
       and interm_reg = ref (gensym "tmp") in
       Ptr( I8), (Id !ret_reg),
-    [
+    List.rev [
       G (!global_id, (Array (String.length str + 1, I8),  GString str)); 
       E (!ret_reg, Alloca (Ptr(I8))); 
-      I (!interm_reg, Gep (I8, Gid !global_id, [Const 0L])) ;
+      I (!interm_reg,  Bitcast(Ptr (Array (String.length str + 1, I8)),Gid !global_id,Ptr (I8) )) ;
       I (gensym "tmp", Store (Ptr(I8), Id !interm_reg, Id !ret_reg))
     ] 
     
@@ -382,38 +396,39 @@ match expr with
      let ret_ty, binop_instr_stream = cmp_bop binop (Id !op1_reg) (Id !op2_reg) !res_reg
     in
 
-    ret_ty, (Id !ret_reg) , (stream1 @ stream2 @ 
-    [I(!op1_reg, Load (ll_ty1, op1) ); I(!op2_reg, Load (ll_ty2, op2))] @
-    binop_instr_stream @ 
-    [I(gensym "tmp", Store (ll_ty1, (Id !res_reg), (Id !ret_reg)))]
+    ret_ty, (Id !ret_reg) , (stream1 >@ stream2 >@ 
+    
+    [E (!ret_reg, Alloca ret_ty)] >@
+    lift [(!op1_reg, Load (Ptr ll_ty1, op1) ); (!op2_reg, Load ( Ptr ll_ty2, op2))] >@
+    binop_instr_stream >@ 
+    lift [(gensym "tmp", Store (ret_ty, (Id !res_reg), (Id !ret_reg)))]
     )
 
   | Uop (unop,exp) -> 
     let ll_ty, op, stream = cmp_exp c exp in 
     let ret_ty, unop_instr_stream = cmp_uop unop (Id !op1_reg) !res_reg
   in
-    ret_ty, Id !ret_reg, (stream @
-    [I(!op1_reg, Load(ll_ty, op))] @
-    unop_instr_stream @ 
-    [I(gensym "tmp", Store (ll_ty, (Id !res_reg), (Id !ret_reg)))]
+    ret_ty, Id !ret_reg, (stream >@
+
+    [E (!ret_reg, Alloca ret_ty)] >@
+    [I(!op1_reg, Load(Ptr ll_ty, op))] >@
+    unop_instr_stream >@ 
+    [I(gensym "tmp", Store (ret_ty, (Id !res_reg), (Id !ret_reg)))]
     )
   | Id id -> 
       let ll_ty, ll_op = Ctxt.lookup id c in
-      ll_ty, Id !ret_reg, 
-      [
-        E(!op1_reg, Alloca ll_ty);
-        I(gensym "tmp", Store (ll_ty, ll_op, Id !ret_reg))
-      ]
+      ll_ty, ll_op, []
   | Call (f_expr, args) -> 
       let ptr_ty, op_ptr, stream_ptr = cmp_exp c f_expr
       and cmped_args = List.map (fun exp -> cmp_exp c exp) args in
-      let ty_id_load  = List.map (fun (ty, op, _ ) -> let arg_reg = ref (gensym "arg") in (ty, (Ll.Id !arg_reg), I(!arg_reg, Load (ty, op)) )) cmped_args
+      let ty_id_load  = List.map (fun (ty, op, _ ) -> let arg_reg = ref (gensym "arg") in (ty, (Ll.Id !arg_reg), I(!arg_reg, Load (Ptr ty, op)) )) cmped_args
   in 
     let call_args = List.map (fun (ty, op, _) -> (ty, op)) ty_id_load 
     and stream_load = List.map (fun (_, _, inst) -> inst) ty_id_load in
-    let fin_stream = stream_ptr @ 
-    (List.concat_map (fun (_, _, stream) -> stream) cmped_args) @
-    stream_load @
+
+    let fin_stream = stream_ptr >@ 
+    (List.concat_map (fun (_, _, stream) -> stream) cmped_args) >@
+    stream_load >@
     [
       I( !ret_reg, Call (ptr_ty, op_ptr,call_args))
     ]
@@ -450,17 +465,116 @@ match expr with
  *)
 
 let rec cmp_stmt (c:Ctxt.t) (rt:Ll.ty) (stmt:Ast.stmt node) : Ctxt.t * stream =
-  let {elt = stmt} = stmt in
+  let {elt = stmt} = stmt
+  and rhs_reg = ref (gensym "rhs")
+  and var_reg = ref (gensym "var")
+  and ret_reg = ref (gensym "ret_function")
+  and cmp_stmt_list c ret_ty stmt_l = List.fold_left (fun (c, code) s ->
+        let c, new_stream = cmp_stmt c rt s in
+        (c, code >@ new_stream)) (c, []) stmt_l
+
+
+ in
   match stmt with
   | Ret None -> c , [T (Ret (Void, None))]
   | Ret Some (exp_node) -> 
-        let {elt = exp} = exp_node in
-          begin match exp with
-          | CInt num -> c, [ T (Ret (I64, Some (Const num)))]
-          | CBool b ->  c , [T(Ret (I1, Some (Const (b |> Bool.to_int |> Int64.of_int ) ) ))]
-          | _ -> c, []
-          end
-  | _ -> c, []
+    let ll_ty, op, stream = cmp_exp c exp_node in 
+    c, stream >@ lift [(!ret_reg, Load (Ptr(ll_ty), op))] >@ [T (Ret( ll_ty, Some (Id !ret_reg)))]
+    
+  | Assn (exp1, exp2) -> 
+      let ll_ty_lhs, op_lhs, stream_lhs = cmp_exp c exp1
+      and ll_ty_rhs, op_rhs, stream_rhs = cmp_exp c exp2
+  in
+      let stream_load_rhs = lift [(!rhs_reg, Load (Ptr ll_ty_rhs, op_rhs)); (gensym "tmp", Store( ll_ty_lhs, (Id !rhs_reg), op_lhs))] 
+  in
+   (c, stream_lhs >@ stream_rhs >@ stream_load_rhs)
+   
+  | Decl (id, exp1) -> 
+    let ll_ty_rhs, op_rhs, stream_rhs = cmp_exp c exp1 in
+    let stream  = stream_rhs >@ [E (!var_reg, Alloca ll_ty_rhs)] >@ lift [(!rhs_reg, Load(Ptr(ll_ty_rhs), op_rhs)) ; (gensym "tmp", Store(  ll_ty_rhs, (Id !rhs_reg), (Id !var_reg)))] in
+    let new_c = Ctxt.add c id (ll_ty_rhs, (Id !var_reg)) in
+    (new_c, stream) 
+    
+  | SCall (f_expr, args) -> 
+      let ptr_ty, op_ptr, stream_ptr = cmp_exp c f_expr
+      and cmped_args = List.map (fun exp -> cmp_exp c exp) args in
+      let ty_id_load  = List.map (fun (ty, op, _ ) -> let arg_reg = ref (gensym "arg") in (ty, (Ll.Id !arg_reg), I(!arg_reg, Load (Ptr ty, op)) )) cmped_args
+    in 
+    let call_args = List.map (fun (ty, op, _) -> (ty, op)) ty_id_load 
+    and stream_load = List.map (fun (_, _, inst) -> inst) ty_id_load in
+
+    let fin_stream = stream_ptr >@ 
+    (List.concat_map (fun (_, _, stream) -> stream) cmped_args) >@
+    stream_load >@
+    [
+      let Ptr(Fun(_, ret_ty)) = ptr_ty in
+      I( !ret_reg, Call (ret_ty, op_ptr,call_args))
+    ]
+  in
+    c, fin_stream
+    
+  | While (expr, stmt_l) ->
+    let lbl_test = ref (gensym "test")
+    and lbl_body = ref (gensym "body")
+    and lbl_fin = ref (gensym "fin")
+  in
+    let ll_ty, op, stream_condition = cmp_exp c expr 
+    and c_new, body_stream = cmp_stmt_list c rt stmt_l
+    in
+    c, (
+    
+      [T(Br !lbl_test) ] >@  
+
+    [L( !lbl_test)] >@
+      stream_condition >@
+      lift [(!var_reg, Load(Ptr(ll_ty), op))] >@
+      [T (Cbr ((Id !var_reg), !lbl_body, !lbl_fin) )] >@
+
+    [L (!lbl_body)] >@
+      body_stream >@
+      [T(Br (!lbl_test))] >@
+    
+    [L(!lbl_fin)]
+    )
+  | If (exp, if_stmt_l, else_stmt_l) -> 
+    let lbl_if = ref (gensym "if")
+    and lbl_else = ref (gensym "else")
+    and lbl_fin = ref (gensym "fin")
+  in
+    let ll_ty, op_condition, stream_condition = cmp_exp c exp
+    and c_if, stream_if = cmp_stmt_list c rt if_stmt_l
+    and c_else, stream_else = cmp_stmt_list c rt else_stmt_l 
+  in
+    c, (stream_condition >@
+    lift [(!var_reg, Load (Ptr ll_ty, op_condition))] >@
+    [T (Cbr ((Id !var_reg), !lbl_if, !lbl_else))] >@
+    [L(!lbl_if)] >@
+      stream_if >@
+      [T(Br !lbl_fin)] >@
+    [L(!lbl_else)] >@
+      stream_else >@
+      [T(Br !lbl_fin)] >@
+    [L(!lbl_fin)])
+
+  |For (decl_l, cond_exp, inc_stmt, body_stmt_l) ->
+    let decl_l = List.map (fun vd -> {elt = Decl vd ; loc = ("frontend.ml", (69, 420), (69,420) )}) decl_l
+  in
+    let condition_expr =
+      begin match cond_exp with
+      | None -> {elt = (CBool true); loc = ("frontend.ml", (69, 420), (69,420))}
+      | Some exp -> exp
+    end
+    and while_body_stmt_l = 
+      begin match inc_stmt with
+      | None -> body_stmt_l
+      | Some inc_stmt -> body_stmt_l @ [inc_stmt] 
+      end
+    in
+       let for_c, stream = cmp_stmt_list c rt @@ decl_l @ [{elt = (Ast.While (condition_expr, while_body_stmt_l)); loc = ("frontend.ml", (69, 420), (69,420))}] 
+    in
+      (c, stream)
+  | _ -> (c, [])
+      
   
 
 (* Compile a series of statements *)
@@ -539,13 +653,11 @@ let cmp_fdecl (c:Ctxt.t) (f:Ast.fdecl node) : Ll.fdecl * (Ll.gid * Ll.gdecl) lis
     let ll_param_tys = List.map (fun (ty, _)  -> cmp_ty ty) func_decl.args in
     let ll_uid_params = List.map (fun (_ , ast_id) -> gensym ast_id) func_decl.args in
     let new_c, minimal_stream = cmp_block c (cmp_ret_ty func_decl.frtyp) func_decl.body in
-    let minimal_cfg, additional_gdecls = cfg_of_stream minimal_stream in
+    let minimal_cfg, gdecls = cfg_of_stream minimal_stream in
 
-   (* let alloc_args = List.map (fun (ty, _) -> cnt := !cnt + 1; (String.of_int cnt!, Alloca cmp_ty ty)) func_decl.args in
-    let store_args = List.map2 (fun  (ty, ast_id) (ptr_id, _) -> Store (cmp_ty ty, Id (gensym ast_id), Id ptr_id ) ) func_decl.args alloc_args in
-    let _ = List.iter (fun (ast_ty, ast_id) -> Ctxt.add c (ast_id, ( cmp_ty ast_ty,  Id (gensym ast_id)))) c  in  *)
 
-    {f_ty =  (ll_param_tys, (cmp_ret_ty func_decl.frtyp)); f_param = ll_uid_params ; f_cfg = minimal_cfg}, []
+    if !debug then print_endline @@ string_of_stream @@ List.rev minimal_stream else (); 
+    {f_ty =  (ll_param_tys, (cmp_ret_ty func_decl.frtyp)); f_param = ll_uid_params ; f_cfg = minimal_cfg}, gdecls
   
   
 

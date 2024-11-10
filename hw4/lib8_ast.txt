@@ -1,0 +1,23 @@
+----------------------------------------------------------------------- lib8.oat
+int program(int argc, string[] argv) {
+  var str  = "Hello world!";
+  print_string(str);
+  return 0;
+}
+
+
+
+
+[ Gfdecl ({ elt = { frtyp = RetVal (TInt); fname = "program"; args = [ (TInt,"argc") ; (TRef ((RArray (TRef (RString)))),"argv") ]; body = [ { elt = Decl (("str", { elt = CStr "Hello world!"; loc = ("oatprograms/lib8.oat", (1, 25), (1, 26)) })); loc = ("oatprograms/lib8.oat", (1, 2), (1, 27)) } ; { elt = SCall ({ elt = Id "print_string"; loc = ("oatprograms/lib8.oat", (2, 2), (2, 14)) }, [ { elt = Id "str"; loc = ("oatprograms/lib8.oat", (2, 16), (2, 19)) } ]); loc = ("oatprograms/lib8.oat", (2, 2), (2, 21)) } ; { elt = Ret (Some ({ elt = CInt 0L; loc = ("oatprograms/lib8.oat", (3, 9), (3, 10)) })); loc = ("oatprograms/lib8.oat", (3, 2), (3, 11)) } ] }; loc = ("oatprograms/lib8.oat", (0, 0), (4, 1)) }) ]
+
+_str11 [13 x i8] c"Hello world!\00"
+%_return9 = alloca i8*
+%_tmp12 = bitcast [13 x i8]* @_str11 to i8*
+store i8* %_tmp12, i8** %_return9
+%_var4 = alloca i8*
+%_rhs3 = load i8*, i8** %_return9
+store i8* %_rhs3, i8** %_var4
+store i64 0, i64* %_return24
+%_return24 = alloca i64
+%_ret_function20 = load i64, i64* %_return24
+ret i64 %_ret_function20

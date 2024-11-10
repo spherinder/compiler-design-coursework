@@ -1,0 +1,34 @@
+---------------------------------------------------------------------- lfsr2.oat
+global lfsr_length = 4;
+
+global lfsr_init_values = new bool[]{true, false, true, false};
+
+void print_lfsr(bool[] lfsr_register, int len) {
+  for (var i  = 0; i < len; i = i + 1;) {
+    var x  = lfsr_register[i];
+  }
+  return;
+}
+
+
+int program(int argc, string[] argv) {
+  print_lfsr(lfsr_init_values, lfsr_length);
+  return 0;
+}
+
+
+
+
+[ Gvdecl ({ elt = { name = "lfsr_length"; init = { elt = CInt 4L; loc = ("oatprograms/lfsr2.oat", (0, 26), (0, 27)) } }; loc = ("oatprograms/lfsr2.oat", (0, 0), (0, 28)) }) ; Gvdecl ({ elt = { name = "lfsr_init_values"; init = { elt = CArr (TBool,[ { elt = CBool true; loc = ("oatprograms/lfsr2.oat", (1, 37), (1, 41)) } ; { elt = CBool false; loc = ("oatprograms/lfsr2.oat", (1, 43), (1, 48)) } ; { elt = CBool true; loc = ("oatprograms/lfsr2.oat", (1, 50), (1, 54)) } ; { elt = CBool false; loc = ("oatprograms/lfsr2.oat", (1, 56), (1, 61)) } ]); loc = ("oatprograms/lfsr2.oat", (1, 26), (1, 62)) } }; loc = ("oatprograms/lfsr2.oat", (1, 0), (1, 63)) }) ; Gfdecl ({ elt = { frtyp = TVoid; fname = "print_lfsr"; args = [ (TRef ((RArray (TBool))),"lfsr_register") ; (TInt,"len") ]; 
+body = [ { elt = For ([ ("i", { elt = CInt 0L; loc = ("oatprograms/lfsr2.oat", (4, 17), (4, 18)) }) ],Some ({ elt = Bop (Lt,{ elt = Id "i"; loc = ("oatprograms/lfsr2.oat", (4, 20), (4, 21)) },{ elt = Id "len"; loc = ("oatprograms/lfsr2.oat", (4, 24), (4, 27)) }); loc = ("oatprograms/lfsr2.oat", (4, 20), (4, 27)) }),Some ({ elt = Assn ({ elt = Id "i"; loc = ("oatprograms/lfsr2.oat", (4, 29), (4, 30)) },{ elt = Bop (Add,{ elt = Id "i"; loc = ("oatprograms/lfsr2.oat", (4, 33), (4, 34)) },{ elt = CInt 1L; loc = ("oatprograms/lfsr2.oat", (4, 37), (4, 38)) }); loc = ("oatprograms/lfsr2.oat", (4, 33), (4, 38)) }); loc = ("oatprograms/lfsr2.oat", (4, 29), (4, 39)) }),
+[ { elt = Decl (("x", { elt = Index ({ elt = Id "lfsr_register"; loc = ("oatprograms/lfsr2.oat", (5, 16), (5, 29)) }, { elt = Id "i"; loc = ("oatprograms/lfsr2.oat", (5, 30), (5, 31)) }); loc = ("oatprograms/lfsr2.oat", (5, 16), (5, 32)) })); loc = ("oatprograms/lfsr2.oat", (5, 8), (5, 33)) } ]); loc = ("oatprograms/lfsr2.oat", (4, 4), (6, 5)) } ; 
+{ elt = Ret (None); loc = ("oatprograms/lfsr2.oat", (7, 4), (7, 11)) } ] }; loc = ("oatprograms/lfsr2.oat", (3, 0), (8, 1)) }) ; Gfdecl ({ elt = { frtyp = RetVal (TInt); fname = "program"; args = [ (TInt,"argc") ; (TRef ((RArray (TRef (RString)))),"argv") ]; body = [ { elt = SCall ({ elt = Id "print_lfsr"; loc = ("oatprograms/lfsr2.oat", (12, 4), (12, 14)) }, [ { elt = Id "lfsr_init_values"; loc = ("oatprograms/lfsr2.oat", (12, 15), (12, 31)) } ; { elt = Id "lfsr_length"; loc = ("oatprograms/lfsr2.oat", (12, 33), (12, 44)) } ]); loc = ("oatprograms/lfsr2.oat", (12, 4), (12, 46)) } ; { elt = Ret (Some ({ elt = CInt 0L; loc = ("oatprograms/lfsr2.oat", (13, 11), (13, 12)) })); loc = ("oatprograms/lfsr2.oat", (13, 4), (13, 13)) } ] }; loc = ("oatprograms/lfsr2.oat", (10, 0), (14, 1)) }) ]
+
+%_arg24 = load i64, i64* @_lfsr_length1
+%_arg23 = load { i64, [0 x i64] }*, { i64, [0 x i64] }** @_lfsr_init_values2
+%_ret_function7 = call void ({ i64, [0 x i1] }*, i64)* @print_lfsr({ i64, [0 x i64] }* %_arg23, i64 %_arg24)
+store i64 0, i64* %_return31
+%_return31 = alloca i64
+%_ret_function27 = load i64, i64* %_return31
+ret i64 %_ret_function27
+ret void
