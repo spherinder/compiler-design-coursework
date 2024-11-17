@@ -78,7 +78,7 @@ and subtype_ref (c : Tctxt.t) (t1 : Ast.rty) (t2 : Ast.rty) : bool =
       | RString, RString -> true
       | RArray sty1, RArray sty2 -> subtype c sty1 sty2 && subtype c sty2 sty1
       | RFun (ty_l1, ret_ty1),  RFun (ty_l2, ret_ty2) -> let check_args =  List.for_all2 (fun t1 t2 -> subtype c t1 t2) ty_l2 ty_l1 in 
-            and_l check_args  &&  subtype_ret c ret_ty1 ret_ty2  
+             check_args  &&  subtype_ret c ret_ty1 ret_ty2  
       | RStruct sid1, RStruct sid2 ->
         let fields_id2 = lookup_struct sid2 c in
 
@@ -345,15 +345,16 @@ let typecheck_block (c: Tctxt.t) (b: Ast.block) (l : 'a Ast.node) (ret_ty: ret_t
     else new_c
     ) c  body 
   in 
-  let _, def_returns = typecheck_stmt new_ctxt exit ret_ty in
-  if def_returns then ()
+  let (_, def_returns) = typecheck_stmt new_ctxt exit ret_ty in
+
+  if def_returns then true 
   else type_error l "last statement of block doesn't return" 
   
 
 let typecheck_fdecl (tc : Tctxt.t) (f : Ast.fdecl) (l : 'a Ast.node) : unit =
-    let tc_local = List.fold_left (fun ctxt (ty, id) -> Tctxt.add_local c id ty) tc f.args in
+    let tc_local = List.fold_left (fun ctxt (ty, id) -> Tctxt.add_local ctxt id ty) tc f.args in
     let _ = typecheck_block tc_local f.body l f.frtyp in (*check body using statement*)
-    let _ = List.iter (fun ty, _ -> typecheck_ty l tc ty) f.args in   (*check args: H |- t1, H |- t2 ...*)
+    let _ = List.iter (fun (ty, _) -> typecheck_ty l tc ty) f.args in   (*check args: H |- t1, H |- t2 ...*)
     () (*both assumptions combinde to prove that H, G |- rty f(t1 t2 etc) block *)
 
 
