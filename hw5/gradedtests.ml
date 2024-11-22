@@ -487,4 +487,4 @@ let functionality_tests : suite = [GradedTest("functionality tests from HW04", 1
 let graded_tests : suite =
   typecheck_tests @
   hw5_tests @
-  functionality_tests
+  functionality_tests 

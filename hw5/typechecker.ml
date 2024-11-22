@@ -3,13 +3,11 @@ open Astlib
 open Tctxt
 
 
-
-let and_l (list: bool list) = 
-  List.fold_left (fun a b -> a && b) true list
-
-
-let or_l (list: bool list) = 
-  List.fold_left (fun a b -> a || b) false list
+let rec take (i : int) (l : 'a list) : 'a list =
+  if i <= 0 then []
+  else match l with
+    | [] -> []
+    | x::xs -> x::take (i-1) xs
 
 
 (* Error Reporting ---------------------------------------------------------- *)
@@ -61,6 +59,7 @@ let rec subtype (c : Tctxt.t) (t1 : Ast.ty) (t2 : Ast.ty) : bool =
   | TInt, TInt -> true
   | TBool , TBool -> true
   | TRef rty1, TRef rty2 -> subtype_ref c rty1 rty2
+  | TRef rty1, TNullRef rty2 -> subtype_ref c rty1 rty2
   | TNullRef rty1, TNullRef rty2 -> subtype_ref c rty1 rty2
   | _, _ -> false
   
@@ -77,18 +76,29 @@ and subtype_ref (c : Tctxt.t) (t1 : Ast.rty) (t2 : Ast.rty) : bool =
       match t1, t2 with
       | RString, RString -> true
       | RArray sty1, RArray sty2 -> subtype c sty1 sty2 && subtype c sty2 sty1
-      | RFun (ty_l1, ret_ty1),  RFun (ty_l2, ret_ty2) -> let check_args =  List.for_all2 (fun t1 t2 -> subtype c t1 t2) ty_l2 ty_l1 in 
+      | RFun (ty_l1, ret_ty1),  RFun (ty_l2, ret_ty2) -> let check_args =  try List.for_all2 (fun t1 t2 -> subtype c t1 t2) ty_l2 ty_l1 with Invalid_argument _ -> false in 
              check_args  &&  subtype_ret c ret_ty1 ret_ty2  
+
       | RStruct sid1, RStruct sid2 ->
-        let fields_id2 = lookup_struct sid2 c in
 
-        List.for_all (fun {fieldName = f_name; ftyp =  ty} ->
+        let fields_id1 = lookup_struct sid1 c
+        and fields_id2 = lookup_struct sid2 c in
 
-          match lookup_field_option sid1 f_name c with
-          |None -> false
-          |Some ty2 -> subtype c ty ty2 && subtype c ty2 ty
+        let n = List.length fields_id2 in
+        let first_fields1 = take n fields_id1 in
+         
+        if (List.length fields_id2 = 0) then true
+        else 
 
-          ) fields_id2 
+        begin try 
+
+          List.for_all2 (
+          fun {fieldName = fname1; ftyp = ty1} {fieldName = fname2; ftyp = ty2 } ->
+            String.equal fname1 fname2 && ty1 = ty2
+          ) first_fields1 fields_id2 
+
+          with Invalid_argument _ -> false end 
+
       | _, _ -> false
 
 (* well-formed types -------------------------------------------------------- *)
@@ -120,7 +130,7 @@ and typecheck_rty (l : 'a Ast.node) (tc : Tctxt.t) (t : Ast.rty) : unit =
   | RStruct id -> 
     begin match lookup_struct_option id tc with
     |  None -> type_error l "struct not defined\n"
-    |  Some field_l -> List.hd @@ List.map (fun {fieldName = _; ftyp = fty} -> typecheck_ty l tc fty) field_l
+    |  Some _ -> ()
     end
   | RFun (ty_l, ret_ty) -> List.map (fun ty -> typecheck_ty l tc ty) ty_l; typecheck_ret_ty l tc ret_ty
 
@@ -163,7 +173,7 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
     | CStr _ -> TRef RString
     | Id id -> 
        begin match lookup_option id c with
-        | None -> type_error e "id not present in type ctxt"
+        | None -> type_error e (Printf.sprintf "id %s not present in type ctxt" id)
         | Some ty -> ty
         end
 
@@ -178,14 +188,21 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
         end
 
     | NewArr (ty, len_exp, id, init_expr) ->
+      let _ = typecheck_ty e c ty in
       let len_ty = typecheck_exp c len_exp in
       begin match len_ty with 
               |TInt -> 
-                  let type_init = typecheck_exp c init_expr in
-                  begin match subtype c type_init ty with
-                  | true -> (TRef (RArray ty)) 
-                  | false -> type_error e "Exp type of (T[] = NewArray) initializer expression not subtype of T "
-                  end
+                  let new_c = Tctxt.add_local c id TInt in
+                  let type_init = typecheck_exp new_c init_expr in
+                  if subtype c type_init ty 
+                    then 
+                      begin match lookup_local_option id c with
+                      | None -> (TRef (RArray ty))
+                      | Some _ -> type_error e "initializer Id shadowing local context"
+                      end 
+                    else type_error e "Exp type of (T[] = NewArray) initializer expression not subtype of T "
+                    
+
               | _ -> type_error e "Length expression in an (T[] = NewArray) expression is not int"
       end
 
@@ -203,9 +220,9 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
           let comparator_fields {fieldName = f1;_} {fieldName = f2;_} = (Hashtbl.hash f1) - (Hashtbl.hash f2) in 
           let sorted_inits = List.sort comparator_tuples field_l in 
           let sorted_fields = List.sort comparator_fields sty_field_l in
-          let well_typed = List.for_all2 (fun (iname, exp1) {fieldName = fname; ftyp = fty} -> 
+          let well_typed = try List.for_all2 (fun (iname, exp1) {fieldName = fname; ftyp = fty} -> 
             String.equal iname fname &&  
-            subtype c (typecheck_exp c exp1) fty) sorted_inits sorted_fields 
+            subtype c (typecheck_exp c exp1) fty) sorted_inits sorted_fields with Invalid_argument _ -> false
           in
           if well_typed then (TRef (RStruct sid)) else type_error e "Struct inititialization arguments not well-typed"
       end
@@ -223,12 +240,13 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
     | Some {fieldName = fname;ftyp =  fty} -> fty 
     end
 
-    | Call (fun_exp, arg_exp_l) ->
+  | Call (fun_exp, arg_exp_l) ->
 
       begin match (typecheck_exp c fun_exp) with
         | TRef (RFun (arg_l, ret_ty)) -> 
 
-          let args_well_typed = List.for_all2 (fun arg_exp ty -> subtype c (typecheck_exp c arg_exp) ty) arg_exp_l arg_l 
+          let args_well_typed = try List.for_all2 (fun arg_exp ty -> subtype c (typecheck_exp c arg_exp) ty) arg_exp_l arg_l 
+                                with Invalid_argument _ -> false
           in
           begin match args_well_typed with 
           | true -> 
@@ -242,32 +260,40 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
         | _ -> type_error e "function expression does not evaluate to type a function pointer"
       end
 
-    | Bop (binop, exp1, exp2) -> 
+  | Bop (binop, exp1, exp2) -> 
 
-      let op1_ty, op2_ty = (typecheck_exp c exp1), (typecheck_exp c exp2) in
-      let mutual_subtypes = subtype c op1_ty op2_ty && subtype c op2_ty op1_ty in
+      let op1_ty = (typecheck_exp c exp1)  
+      and op2_ty = (typecheck_exp c exp2) in 
 
       begin match binop with  
       | Eq | Neq ->
-          begin match mutual_subtypes with
+          begin match (op1_ty = op2_ty)  with
           |true -> TBool
           |false -> type_error e "comparison of incompatible types" 
           end
       |_ -> 
         let (ty1, ty2, ret_ty) = typ_of_binop binop in
-        begin match op1_ty, op2_ty with
-        | ty1, ty2 -> ret_ty
-        | _, _ -> type_error e "Operands of binary op expr. are ill-typed" 
-        end
+          if  ty1 = op1_ty &&  ty2 = op2_ty 
+          then ret_ty
+          else type_error e "Operands of binary op expr. are ill-typed" 
       end 
       
-    | Uop (uop, exp1) -> 
+  | Uop (uop, exp1) -> 
       let op1_ty = (typecheck_exp c exp1) in
       let (ty1, ret_ty) = typ_of_unop uop in
       begin match op1_ty with
       | ty1 -> ret_ty
       | _ -> type_error e "Operand of unary op expr. is ill-typed"
       end
+  | Index (exp1, exp_inx) ->
+    let inx_ty = typecheck_exp c exp_inx in 
+    let exp_ty = typecheck_exp c exp1 in
+      begin match inx_ty, exp_ty with
+      | TInt, TRef(RArray ty) -> ty 
+      | _ -> type_error e "Index in index expr not of type int"
+      end 
+
+      
 
 
 
@@ -301,11 +327,147 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
    not important, but the fact that the error is raised, is important.  (Our
    tests also do not check the location information associated with the error.)
 
-   - You will probably find it convenient to add a helper function that implements the 
-     block typecheck rules.
+   - You will probably find it convenient to add a helper function that impled
 *)
+
+
+
 let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.t * bool =
-  failwith "todo: implement typecheck_stmt"
+  let {elt = stmt} = s in
+  match stmt with
+  | Decl (id, exp) -> 
+    begin match (lookup_local_option id tc) with
+    | Some _ -> type_error s "Variable redeclared"
+    | None -> 
+      let exp_ty = typecheck_exp tc exp in
+      let new_tc = Tctxt.add_local tc id exp_ty in 
+      (new_tc, false)
+    end
+
+  | Assn (exp_lhs, exp_rhs) -> 
+
+    
+    let ty_lhs = typecheck_exp tc exp_lhs 
+    and ty_rhs = typecheck_exp tc exp_rhs in
+    
+    begin match exp_lhs, ty_lhs with 
+
+    | ({elt = Id id}), (TRef(RFun _ )) -> 
+      begin match (lookup_global_option id tc) with
+        |None -> let subtype_check = subtype tc ty_rhs ty_lhs in
+                if subtype_check 
+                then (tc, false)
+                else type_error s "Type of rhs not subtype of lhs"  
+
+        |Some _ -> type_error s "Tried to assign with a function id on rhs" 
+        end
+    | _, _ -> let subtype_check = subtype tc ty_rhs ty_lhs in
+                if subtype_check 
+                then (tc, false)
+                else type_error s "Type of rhs not subtype of lhs"  
+
+    end
+
+  | Ret return_val -> 
+    begin match return_val, to_ret with
+    | None, RetVoid -> (tc, true) 
+    | Some exp, RetVal ty -> 
+      let ty_exp = typecheck_exp tc exp in 
+        if subtype tc ty_exp ty
+        then (tc, true)
+        else type_error s "Return type incompatible with the type of function return" 
+    | _, _ -> type_error s "Return type mismatch"  
+    end
+
+  | SCall (f_exp, arg_exp_l) -> 
+      let f_ty = typecheck_exp tc f_exp in
+      begin match f_ty with
+      | TRef (RFun (f_arg_tys, RetVoid)) ->
+        let well_typed =
+                        try 
+                          List.for_all2 (fun exp_arg ty_param -> 
+                          let ty_arg = typecheck_exp tc exp_arg in subtype tc ty_arg ty_param ) 
+                          arg_exp_l f_arg_tys         (*And arguments have the right types*)
+                        with 
+                        Invalid_argument _ -> false 
+
+
+          in
+          if well_typed 
+          then (tc, false) 
+          else type_error s "function arguments not well-typed" 
+
+      | _ -> type_error s "function called but return value never used" 
+
+      end
+    
+  | If (exp_condition, block1, block2) ->
+    begin match typecheck_exp tc exp_condition with
+    | TBool -> 
+        let returns_block1 = typecheck_block tc block1 to_ret
+        and returns_block2 = typecheck_block tc block2 to_ret in
+        (tc, returns_block1 && returns_block2)
+    | _ -> type_error s "condition expression doesn't return boolean"
+    end
+
+  | While (exp_condition, block) -> 
+    begin match typecheck_exp tc exp_condition with
+    | TBool -> 
+      let _ = typecheck_block tc block to_ret in
+      (tc, false)
+    | _ -> type_error s "condition expression doesn't return boolean"
+    end
+  | For (vdecls, Some test_exp, Some inc_s, block) -> 
+    let new_c = List.fold_left (fun c (id, decl_exp) -> 
+      Tctxt.add_local c id (typecheck_exp c decl_exp)) tc vdecls
+    in
+      begin match (typecheck_exp new_c test_exp) with
+      | TBool -> 
+        let _, inc_returns = typecheck_stmt new_c inc_s to_ret in
+        let _ = typecheck_block new_c block to_ret in
+        if inc_returns
+        then type_error s "increment of loop stmt returns"
+        else (tc, false) 
+
+      | _ -> type_error s "for-loop test expression doesn't return boolean"
+      end
+  | Cast (rty, id, exp, block1, block2) -> 
+    let ty_rhs = typecheck_exp tc exp in
+    
+    begin match ty_rhs with
+    | TNullRef(ref_rhs) ->
+      if (subtype tc (TRef ref_rhs) (TRef rty) ) 
+        then 
+          let new_c = Tctxt.add_local tc id (TRef rty) in
+          let ret1 = typecheck_block new_c block1 to_ret in
+          let ret2 = typecheck_block tc block2 to_ret in
+          (tc, ret1 && ret2)
+        else type_error s "Rhs not a subtype of lhs in cast expression."
+    | _ -> type_error s "rhs doesn't evaluate to a TNullRef type"
+    end
+    
+
+
+and separate_block list = 
+  let rev_list = List.rev list in
+  (rev_list |> List.tl |> List.rev, List.hd rev_list)  
+
+and typecheck_block (c: Tctxt.t) (b: Ast.block) (ret_ty: ret_ty): bool  =
+  if List.length b = 0 then false else 
+
+  let (body, exit) = separate_block b
+  in 
+  let new_ctxt = List.fold_left (fun ctxt s -> 
+    let new_c, def_returns = typecheck_stmt ctxt s ret_ty in
+    if def_returns then type_error s "only the last statement of a block can defenitely return"
+    else new_c
+    ) c  body 
+  in 
+  let (_, block_def_returns) = typecheck_stmt new_ctxt exit ret_ty in
+  block_def_returns
+
+
+  
 
 
 (* struct type declarations ------------------------------------------------- *)
@@ -332,31 +494,15 @@ let typecheck_tdecl (tc : Tctxt.t) id fs  (l : 'a Ast.node) : unit =
     - checks that the function actually returns
 *)
 
-let separate_block l = 
-  let rev_list = List.rev l in
-  (rev_list |> List.tl |> List.rev, List.hd rev_list)  
-
-let typecheck_block (c: Tctxt.t) (b: Ast.block) (l : 'a Ast.node) (ret_ty: ret_ty): bool =
-  let (body, exit) = separate_block b
-  in 
-  let new_ctxt = List.fold_left (fun ctxt s -> 
-    let new_c, def_returns = typecheck_stmt ctxt s ret_ty in
-    if def_returns then type_error l "only the last statement of a block can defenitely return"
-    else new_c
-    ) c  body 
-  in 
-  let (_, def_returns) = typecheck_stmt new_ctxt exit ret_ty in
-
-  if def_returns then true 
-  else type_error l "last statement of block doesn't return" 
   
 
 let typecheck_fdecl (tc : Tctxt.t) (f : Ast.fdecl) (l : 'a Ast.node) : unit =
-    let tc_local = List.fold_left (fun ctxt (ty, id) -> Tctxt.add_local ctxt id ty) tc f.args in
-    let _ = typecheck_block tc_local f.body l f.frtyp in (*check body using statement*)
-    let _ = List.iter (fun (ty, _) -> typecheck_ty l tc ty) f.args in   (*check args: H |- t1, H |- t2 ...*)
-    () (*both assumptions combinde to prove that H, G |- rty f(t1 t2 etc) block *)
 
+    let _ = List.iter (fun (ty, _) -> typecheck_ty l tc ty) f.args in   (*check args: H |- t1, H |- t2 ...*)
+    let tc_local = List.fold_left (fun ctxt (ty, id) -> Tctxt.add_local ctxt id ty) tc f.args in
+    let return = typecheck_block tc_local f.body f.frtyp in (*check body using statement*) 
+    if return then () else type_error l "Function does not return"
+    (*both assumptions combinde to prove that H, G |- rty f(t1 t2 etc) block *)
 
 
 (* creating the typchecking context ----------------------------------------- *)
@@ -385,44 +531,44 @@ let typecheck_fdecl (tc : Tctxt.t) (f : Ast.fdecl) (l : 'a Ast.node) : unit =
 
    NOTE: global initializers may mention function identifiers as
    constants, but can't mention other global values *)
+let g0 = List.fold_left (fun c (str, (arg_tys, ret_ty) ) -> Tctxt.add_global c str (TRef (RFun (arg_tys, ret_ty))) ) Tctxt.empty builtins
 
 let create_struct_ctxt (p:Ast.prog) : Tctxt.t =
   let f tc decl = 
     match decl with
-    |  Gtdecl {elt = (id,bnd)} -> 
+    |  Gtdecl ({elt = (id,bnd)} as node) -> 
       begin match (lookup_struct_option id tc) with
       | None -> Tctxt.add_struct tc id bnd 
-      | _ -> failwith "duplicated struct defs"
+      | _ -> type_error node "struct redefined" 
       end
-    | _ -> tc 
-  in
-  List.fold_left f Tctxt.empty p 
+    | _ -> tc
+    in
+  List.fold_left f g0 p 
 
 let create_function_ctxt (tc:Tctxt.t) (p:Ast.prog) : Tctxt.t =
   let f c decl = 
     match decl with
-     Gfdecl{ elt ={frtyp = f_ret_ty; fname = id; args = ty_id_l}} -> 
+     Gfdecl ({ elt ={frtyp = f_ret_ty; fname = id; args = ty_id_l}} as node)-> 
       begin match lookup_global_option id c with
       | None -> 
         let arg_tys, _ = List.split ty_id_l in
         let bnd = TRef( RFun (arg_tys, f_ret_ty)) in
         Tctxt.add_global c id bnd 
-      | _ -> failwith "redeclared function"
+      | _ -> type_error node "function redefined" 
       end
     | _ -> c 
   in
   List.fold_left f tc p
   
 let create_global_ctxt (tc:Tctxt.t) (p:Ast.prog) : Tctxt.t =
-  
   let f c decl = 
     match decl with
-     | Gvdecl {elt = {name =id; init = init_exp}} -> (*check if it mentions other gdecls?*)
+     | Gvdecl ({elt = {name =id; init = init_exp}} as node)-> (*check if it mentions other gdecls?*)
       begin match lookup_global_option id c with
       | None -> 
           let ty = typecheck_exp tc init_exp in
           Tctxt.add_global c id ty 
-      | _ -> failwith "redeclared global var" 
+      | _ -> type_error node "global variable redefined" 
       end 
     | _ -> c 
   in
