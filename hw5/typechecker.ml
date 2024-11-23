@@ -120,7 +120,7 @@ and subtype_ref (c : Tctxt.t) (t1 : Ast.rty) (t2 : Ast.rty) : bool =
  
 let rec typecheck_ty (l : 'a Ast.node) (tc : Tctxt.t) (t : Ast.ty) : unit =
   match t with
-  | (TInt | TBool) -> ()
+  | TInt | TBool -> ()
   | TRef rty | TNullRef rty  -> typecheck_rty l tc rty
 
 and typecheck_rty (l : 'a Ast.node) (tc : Tctxt.t) (t : Ast.rty) : unit =
@@ -132,12 +132,14 @@ and typecheck_rty (l : 'a Ast.node) (tc : Tctxt.t) (t : Ast.rty) : unit =
     |  None -> type_error l "struct not defined\n"
     |  Some _ -> ()
     end
-  | RFun (ty_l, ret_ty) -> List.map (fun ty -> typecheck_ty l tc ty) ty_l; typecheck_ret_ty l tc ret_ty
+  | RFun (ty_l, ret_ty) -> let _ =  List.map (fun ty -> typecheck_ty l tc ty) ty_l in typecheck_ret_ty l tc ret_ty
 
 and typecheck_ret_ty (l : 'a Ast.node) (tc : Tctxt.t) (t : Ast.ret_ty) : unit =
   match t with
   | RetVoid -> ()
   | RetVal ty -> typecheck_ty l tc ty
+
+(*Good*)
 
 (* typechecking expressions ------------------------------------------------- *)
 (* Typechecks an expression in the typing context c, returns the type of the
@@ -167,7 +169,7 @@ and typecheck_ret_ty (l : 'a Ast.node) (tc : Tctxt.t) (t : Ast.ret_ty) : unit =
 let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
   let {elt= expr} = e in
    match expr with
-    | CNull rty -> TNullRef rty
+    | CNull rty -> let _ = typecheck_rty e c rty in TNullRef rty
     | CBool _ -> TBool
     | CInt _ -> TInt
     | CStr _ -> TRef RString
@@ -182,39 +184,35 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
       let well_typed = expr_node_l |>  List.map (fun exp -> typecheck_exp c exp) 
                                 |> List.for_all (fun ty_exp -> subtype c ty_exp ty) 
       in 
-        begin match well_typed with
-        | true -> TRef (RArray ty)
-        | false -> type_error e "Array T[] initializers do not evaluate to sybtypes of T"
-        end
+        if well_typed 
+        then  TRef (RArray ty)
+        else type_error e "Array T[] initializers do not evaluate to sybtypes of T"
 
     | NewArr (ty, len_exp, id, init_expr) ->
       let _ = typecheck_ty e c ty in
-      let len_ty = typecheck_exp c len_exp in
-      begin match len_ty with 
-              |TInt -> 
+      let len_ty = typecheck_exp c len_exp
+      and id_in_L = lookup_local_option id c in
+
+      begin match len_ty, id_in_L with 
+              |TInt, None -> 
                   let new_c = Tctxt.add_local c id TInt in
                   let type_init = typecheck_exp new_c init_expr in
                   if subtype c type_init ty 
-                    then 
-                      begin match lookup_local_option id c with
-                      | None -> (TRef (RArray ty))
-                      | Some _ -> type_error e "initializer Id shadowing local context"
-                      end 
+                    then (TRef (RArray ty))
                     else type_error e "Exp type of (T[] = NewArray) initializer expression not subtype of T "
                     
-
-              | _ -> type_error e "Length expression in an (T[] = NewArray) expression is not int"
+              | _, _ -> type_error e "Length expression in an (T[] = NewArray) expression is not int or id shadows local context"
       end
 
     | Length array_exp -> 
       begin match (typecheck_exp c array_exp) with
       | TRef RArray _ -> TInt
-      | _ -> type_error e "method length applied to a non-array argument"
+      | _ -> type_error e "Method length applied to a non-array argument"
       end
 
     | CStruct (sid, field_l) -> 
       begin match lookup_struct_option sid c with
-      | None -> type_error e "Struct not defined" (*maybe I should use typecheck_rty ???*)
+      | None -> type_error e "Struct not defined" 
       | Some sty_field_l -> 
           let comparator_tuples (id1, _) (id2, _) = (Hashtbl.hash id1) - (Hashtbl.hash id2) in
           let comparator_fields {fieldName = f1;_} {fieldName = f2;_} = (Hashtbl.hash f1) - (Hashtbl.hash f2) in 
@@ -224,20 +222,20 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
             String.equal iname fname &&  
             subtype c (typecheck_exp c exp1) fty) sorted_inits sorted_fields with Invalid_argument _ -> false
           in
-          if well_typed then (TRef (RStruct sid)) else type_error e "Struct inititialization arguments not well-typed"
+          if well_typed then (TRef (RStruct sid)) else type_error e "Struct inititialization arguments ill-typed"
       end
 
    | Proj (str_exp, id) -> 
     let struct_fields =  
       begin match typecheck_exp c str_exp with 
-      | TRef (RStruct id) -> lookup_struct id c
-      | _ -> type_error e "Struct not defined"
+      | TRef (RStruct id) -> try lookup_struct id c with Not_found -> type_error e "Access to a field in an undefined stuct"
+      | _ -> type_error e "Field access in a non-struct type"
       end
     in
 
     begin match List.find_opt (fun {fieldName = fname; ftyp = fty} -> String.equal fname id) struct_fields with
-    | None -> type_error e "field not present in struct"
     | Some {fieldName = fname;ftyp =  fty} -> fty 
+    | None -> type_error e "field not present in struct"
     end
 
   | Call (fun_exp, arg_exp_l) ->
@@ -248,16 +246,15 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
           let args_well_typed = try List.for_all2 (fun arg_exp ty -> subtype c (typecheck_exp c arg_exp) ty) arg_exp_l arg_l 
                                 with Invalid_argument _ -> false
           in
-          begin match args_well_typed with 
-          | true -> 
-              begin match ret_ty with
-              | RetVoid -> type_error e "void function in an expression"
-              | RetVal t -> t 
-              end
-          | false -> type_error e "arguments passed to function are ill-typed"
-          end
 
-        | _ -> type_error e "function expression does not evaluate to type a function pointer"
+          if args_well_typed 
+          then begin match ret_ty with
+            | RetVoid -> type_error e "Void function in an expression"
+            | RetVal t -> t 
+            end
+          else type_error e "Arguments passed to function are ill-typed"
+
+        | _ -> type_error e "Function expression does not evaluate to type a function pointer"
       end
 
   | Bop (binop, exp1, exp2) -> 
@@ -267,10 +264,9 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
 
       begin match binop with  
       | Eq | Neq ->
-          begin match (op1_ty = op2_ty)  with
-          |true -> TBool
-          |false -> type_error e "comparison of incompatible types" 
-          end
+          if (op1_ty = op2_ty) 
+          then TBool
+          else type_error e "comparison of incompatible types" 
       |_ -> 
         let (ty1, ty2, ret_ty) = typ_of_binop binop in
           if  ty1 = op1_ty &&  ty2 = op2_ty 
@@ -279,17 +275,20 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
       end 
       
   | Uop (uop, exp1) -> 
+      
       let op1_ty = (typecheck_exp c exp1) in
       let (ty1, ret_ty) = typ_of_unop uop in
-      begin match op1_ty with
-      | ty1 -> ret_ty
-      | _ -> type_error e "Operand of unary op expr. is ill-typed"
-      end
+
+      if op1_ty = ty1 
+      then ret_ty
+      else type_error e "Operand of unary op expr. is ill-typed"
+
   | Index (exp1, exp_inx) ->
+
     let inx_ty = typecheck_exp c exp_inx in 
     let exp_ty = typecheck_exp c exp1 in
-      begin match inx_ty, exp_ty with
-      | TInt, TRef(RArray ty) -> ty 
+      begin match exp_ty, inx_ty with
+      | TRef(RArray ty), TInt-> ty 
       | _ -> type_error e "Index in index expr not of type int"
       end 
 
@@ -334,7 +333,9 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
 
 let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.t * bool =
   let {elt = stmt} = s in
+
   match stmt with
+
   | Decl (id, exp) -> 
     begin match (lookup_local_option id tc) with
     | Some _ -> type_error s "Variable redeclared"
@@ -345,7 +346,6 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
     end
 
   | Assn (exp_lhs, exp_rhs) -> 
-
     
     let ty_lhs = typecheck_exp tc exp_lhs 
     and ty_rhs = typecheck_exp tc exp_rhs in
@@ -354,12 +354,11 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
 
     | ({elt = Id id}), (TRef(RFun _ )) -> 
       begin match (lookup_global_option id tc) with
+        |Some _ -> type_error s "Tried to assign with a function id on rhs" 
         |None -> let subtype_check = subtype tc ty_rhs ty_lhs in
                 if subtype_check 
                 then (tc, false)
                 else type_error s "Type of rhs not subtype of lhs"  
-
-        |Some _ -> type_error s "Tried to assign with a function id on rhs" 
         end
     | _, _ -> let subtype_check = subtype tc ty_rhs ty_lhs in
                 if subtype_check 
@@ -368,8 +367,8 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
 
     end
 
-  | Ret return_val -> 
-    begin match return_val, to_ret with
+  | Ret return_exp -> 
+    begin match return_exp, to_ret with
     | None, RetVoid -> (tc, true) 
     | Some exp, RetVal ty -> 
       let ty_exp = typecheck_exp tc exp in 
@@ -563,7 +562,7 @@ let create_function_ctxt (tc:Tctxt.t) (p:Ast.prog) : Tctxt.t =
 let create_global_ctxt (tc:Tctxt.t) (p:Ast.prog) : Tctxt.t =
   let f c decl = 
     match decl with
-     | Gvdecl ({elt = {name =id; init = init_exp}} as node)-> (*check if it mentions other gdecls?*)
+     | Gvdecl ({elt = {name =id; init = init_exp}} as node)-> 
       begin match lookup_global_option id c with
       | None -> 
           let ty = typecheck_exp tc init_exp in
