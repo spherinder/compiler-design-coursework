@@ -76,7 +76,7 @@ and subtype_ref (c : Tctxt.t) (t1 : Ast.rty) (t2 : Ast.rty) : bool =
       match t1, t2 with
       | RString, RString -> true
       | RArray sty1, RArray sty2 -> subtype c sty1 sty2 && subtype c sty2 sty1
-      | RFun (ty_l1, ret_ty1),  RFun (ty_l2, ret_ty2) -> let check_args =  try List.for_all2 (fun t1 t2 -> subtype c t1 t2) ty_l2 ty_l1 with Invalid_argument _ -> false in 
+      | RFun (ty_l1, ret_ty1),  RFun (ty_l2, ret_ty2) -> let check_args =  begin try List.for_all2 (fun t1 t2 -> subtype c t1 t2) ty_l2 ty_l1 with Invalid_argument _ -> false end in 
              check_args  &&  subtype_ret c ret_ty1 ret_ty2  
 
       | RStruct sid1, RStruct sid2 ->
@@ -218,9 +218,9 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
           let comparator_fields {fieldName = f1;_} {fieldName = f2;_} = (Hashtbl.hash f1) - (Hashtbl.hash f2) in 
           let sorted_inits = List.sort comparator_tuples field_l in 
           let sorted_fields = List.sort comparator_fields sty_field_l in
-          let well_typed = try List.for_all2 (fun (iname, exp1) {fieldName = fname; ftyp = fty} -> 
+          let well_typed = begin try List.for_all2 (fun (iname, exp1) {fieldName = fname; ftyp = fty} -> 
             String.equal iname fname &&  
-            subtype c (typecheck_exp c exp1) fty) sorted_inits sorted_fields with Invalid_argument _ -> false
+            subtype c (typecheck_exp c exp1) fty) sorted_inits sorted_fields with Invalid_argument _ -> false end
           in
           if well_typed then (TRef (RStruct sid)) else type_error e "Struct inititialization arguments ill-typed"
       end
@@ -228,7 +228,7 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
    | Proj (str_exp, id) -> 
     let struct_fields =  
       begin match typecheck_exp c str_exp with 
-      | TRef (RStruct id) -> try lookup_struct id c with Not_found -> type_error e "Access to a field in an undefined stuct"
+      | TRef (RStruct id) -> begin try lookup_struct id c with Not_found -> type_error e "Access to a field in an undefined stuct" end
       | _ -> type_error e "Field access in a non-struct type"
       end
     in
@@ -243,8 +243,8 @@ let rec typecheck_exp (c : Tctxt.t) (e : Ast.exp node) : Ast.ty =
       begin match (typecheck_exp c fun_exp) with
         | TRef (RFun (arg_l, ret_ty)) -> 
 
-          let args_well_typed = try List.for_all2 (fun arg_exp ty -> subtype c (typecheck_exp c arg_exp) ty) arg_exp_l arg_l 
-                                with Invalid_argument _ -> false
+          let args_well_typed = begin try List.for_all2 (fun arg_exp ty -> subtype c (typecheck_exp c arg_exp) ty) arg_exp_l arg_l 
+                                with Invalid_argument _ -> false end
           in
 
           if args_well_typed 
@@ -383,13 +383,13 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
       begin match f_ty with
       | TRef (RFun (f_arg_tys, RetVoid)) ->
         let well_typed =
-                        try 
-                          List.for_all2 (fun exp_arg ty_param -> 
-                          let ty_arg = typecheck_exp tc exp_arg in subtype tc ty_arg ty_param ) 
-                          arg_exp_l f_arg_tys         (*And arguments have the right types*)
+                      begin try 
+                        List.for_all2 (fun exp_arg ty_param -> 
+                        let ty_arg = typecheck_exp tc exp_arg in subtype tc ty_arg ty_param ) 
+                        arg_exp_l f_arg_tys         (*And arguments have the right types*)
                         with 
                         Invalid_argument _ -> false 
-
+                      end
 
           in
           if well_typed 
@@ -444,7 +444,7 @@ let rec typecheck_stmt (tc : Tctxt.t) (s:Ast.stmt node) (to_ret:ret_ty) : Tctxt.
         else type_error s "Rhs not a subtype of lhs in cast expression."
     | _ -> type_error s "rhs doesn't evaluate to a TNullRef type"
     end
-    
+  | _ ->  type_error s "Unmatched case in check_stmt"
 
 
 and separate_block list = 
