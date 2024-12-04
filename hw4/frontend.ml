@@ -435,6 +435,43 @@ match expr with
   in
     let Ptr(fin_ty) = ptr_ty in
     fin_ty, (Id !ret_reg), fin_stream
+    
+  | CArr (arr_t, es) -> 
+    let Ptr(t), op, allocstream = oat_alloc_array arr_t (Const (Int64.of_int (List.length es))) in
+    (t, op, allocstream >@
+     List.flatten (List.mapi (fun i elt->
+         let el_t, el_op, stream = cmp_exp c elt in
+         let ptr_sym = gensym "ptr" in 
+         stream >@ List.rev
+           [
+            I (ptr_sym, Gep (t, op, [Const 0L; Const 1L; Const (Int64.of_int i)])) ;
+            I( !op1_reg, Load (Ptr(el_t), el_op)) ; 
+            I (ptr_sym, Store (el_t, Id !op1_reg, Id ptr_sym))
+           ]
+       ) es))
+
+  | Index (elt, iexp) -> 
+    let t, op, stream = cmp_exp c elt in
+    let el_t = (match t with (Struct [_; Array (_,x)]) -> x
+        | _ -> print_endline @@ Llutil.string_of_ty t; failwith "can only index into arrays"
+      ) in
+    let _, iop, istream = cmp_exp c iexp in
+    let sym, elsym = gensym "arr", gensym "elem" in
+    (el_t, Id elsym,
+     stream >@
+     istream >@ List.rev
+       [ I (sym, Gep (t, op, [Const 0L; Const 1L; iop]))
+       ; I (elsym, Load (Ptr el_t, Id sym))
+       ])
+  | NewArr (el_t, len_exp) -> 
+    let lty, lop, lstream = cmp_exp c len_exp in
+    let load_lstream = 
+      lift [(!op1_reg, Load( Ptr lty, lop))] >@
+            lstream
+    in
+    let Ptr(t), op, stream = oat_alloc_array el_t (Id !op1_reg) in
+    (t, op, load_lstream >@
+        stream)
       
 
 (* Compile a statement in context c with return type rt. Return a new context, 
@@ -605,25 +642,21 @@ let cmp_function_ctxt (c : Ctxt.t) (p:Ast.prog) : Ctxt.t =
    Only a small subset of OAT expressions can be used as global initializers
    in well-formed programs. (The constructors starting with C). 
 *)
-let cmp_global_ctxt (c:Ctxt.t) (p:Ast.prog) : Ctxt.t =
-  let ctxt_entry c decl = 
-    match decl with
-      | Gvdecl node -> 
-        let {elt = gdecl} = node in 
-          let {name = ast_id; init = exp_node} = gdecl in
-            let  {elt = expr} = exp_node 
-            and ll_id = gensym ast_id in
-              begin match expr with
-              | CNull rty -> Ctxt.add c  ast_id (cmp_rty rty, Gid ll_id) 
-              | CBool b -> Ctxt.add c ast_id (cmp_ty TBool, Gid ll_id) 
-              | CInt num -> Ctxt.add c ast_id (cmp_ty TInt, Gid ll_id) 
-              | CStr str -> Ctxt.add c ast_id (Ptr I8, Gid ll_id)
-              | CArr _ ->  Ctxt.add c ast_id (Ptr (Struct [I64; Array (0, I64)]) , Gid ll_id)
-              | _ -> failwith "can only insert expr with constructors starting with C into global ctxt"
-              end
-      | Gfdecl _ -> c 
-      in
-      List.fold_left ctxt_entry c p
+let cmp_global_ctxt (c:Ctxt.t) (p : Ast.prog) : Ctxt.t =
+  let vs = List.filter_map (function
+      | Gvdecl v -> Some v.elt
+      | Gfdecl _ ->  None
+    ) p in
+  let ts = List.map (fun {init = {elt; _}; _}->
+      match elt with
+      | CNull t -> Ptr (cmp_rty t)
+      | CBool _ -> I1
+      | CInt _ -> I64
+      | CStr _ -> I8
+      | CArr (t, _) -> (Struct [I64; Array (0, cmp_ty t)])
+      | _ -> failwith "global decl must be of a constant type"
+    ) vs in
+  List.map2 (fun v t-> (v.name, (Ptr t, Ll.Gid v.name))) vs ts @ c
 
       
 
@@ -643,23 +676,25 @@ let cmp_global_ctxt (c:Ctxt.t) (p:Ast.prog) : Ctxt.t =
 
 let empty_cfg : cfg = ({insns= [] ; term = ("bogus_tmn", Br "bs")} , [])
 
-let cmp_fdecl (c:Ctxt.t) (f:Ast.fdecl node) : Ll.fdecl * (Ll.gid * Ll.gdecl) list =
-
-  let cnt = ref 0 in
-
-
-    let {elt = func_decl} = f in 
-
-    let ll_param_tys = List.map (fun (ty, _)  -> cmp_ty ty) func_decl.args in
-    let ll_uid_params = List.map (fun (_ , ast_id) -> gensym ast_id) func_decl.args in
-    let new_c, minimal_stream = cmp_block c (cmp_ret_ty func_decl.frtyp) func_decl.body in
-    let minimal_cfg, gdecls = cfg_of_stream minimal_stream in
-
-
-    if !debug then print_endline @@ string_of_stream @@ List.rev minimal_stream else (); 
-    {f_ty =  (ll_param_tys, (cmp_ret_ty func_decl.frtyp)); f_param = ll_uid_params ; f_cfg = minimal_cfg}, gdecls
-  
-  
+let cmp_fdecl (c:Ctxt.t) ({elt = {args; frtyp; body;_}; _}:Ast.fdecl node) : Ll.fdecl * (Ll.gid * Ll.gdecl) list =
+  let rt = cmp_ret_ty frtyp in
+  let argsyms = List.map (fun (_,id)-> gensym id) args in
+  let argctxt: Ctxt.t = List.map2 (fun (t,id) sym ->
+      (id, (Ptr (cmp_ty t), Ll.Id sym))
+    ) args argsyms in
+  let argstream = List.flatten @@ List.map2 (fun (t,id) sym1->
+      [ I (gensym id, Store (cmp_ty t, Id id, Id sym1))
+      ; E (sym1, Alloca (cmp_ty t))
+      ]
+    ) args argsyms in
+  let _, bstream = cmp_block (argctxt @ c) rt body in
+  let f_cfg, gvs = cfg_of_stream (
+      argstream >@ bstream >@ (if rt = Void then [T (Ret (Void, None))] else [])
+    ) in
+  ({ f_ty = List.map (fun (t,_)->  cmp_ty t) args, rt
+   ; f_param = List.map snd args
+   ; f_cfg
+   }, gvs) 
 
 (* Compile a global initializer, returning the resulting LLVMlite global
    declaration, and a list of additional global declarations.
@@ -672,17 +707,32 @@ let cmp_fdecl (c:Ctxt.t) (f:Ast.fdecl node) : Ll.fdecl * (Ll.gid * Ll.gdecl) lis
    - OAT arrays are always handled via pointers. A global array of arrays will
      be an array of pointers to arrays emitted as additional global declarations.
 *)
-let rec cmp_gexp c (e:Ast.exp node) : Ll.gdecl * (Ll.gid * Ll.gdecl) list =
-    let {elt = exp} = e in
-    match exp with
-    | CNull rty -> (cmp_rty rty , GNull), []
-    | CBool b -> (cmp_ty TBool, GInt (Int64.of_int @@ Bool.to_int b)), []
-    | CInt num -> (cmp_ty TBool, GInt num), []
-    | CArr _ -> failwith "array not implemented in cmp_gexp yet"
-    | CStr _ -> failwith "str not implemented in cmp_gexp yet"
-    | _ -> failwith "illegal typed passed to cmp_gexp"
+let rec cmp_gexp c ({elt; _}:Ast.exp node) : Ll.gdecl * (Ll.gid * Ll.gdecl) list =
+  match elt with
+  | CNull t -> ((Ptr (cmp_rty t), GNull), [])
+  | CBool b -> ((I1, GInt (if b then 1L else 0L)), [])
+  | CInt i -> ((I64, GInt i), [])
+  | CStr s ->
+    let sym = gensym "gstr" in
+    let t = Array (String.length s + 1, I8) in
+    ((Ptr I8, GBitcast (Ptr t, GGid sym, Ptr I8)), [sym, (t, GString s)])
+  | CArr (t, es) -> 
+    let subgdecls = List.map (cmp_gexp c) es in
+    let el_gdecls = List.map fst subgdecls in
+    let extra_gdecls = List.concat_map snd subgdecls in
+    let len = List.length es in
+    let sym = gensym "garr" in
+    let content_t = Struct [I64; Array (len, cmp_ty t)] in
+    let arr_t = cmp_ty (TRef (RArray t)) in
 
-
+    ( (arr_t, GBitcast (Ptr content_t, GGid sym, arr_t))
+    , (sym,
+       ( content_t, GStruct
+           [ I64, GInt (Int64.of_int len)
+           ; Array (len, cmp_ty t), GArray el_gdecls]
+       )) :: extra_gdecls
+    )
+  | _ -> raise (Failure "invalid gexp")
 (* Oat internals function context ------------------------------------------- *)
 let internals = [
     "oat_alloc_array",         Ll.Fun ([I64], Ptr I64)
