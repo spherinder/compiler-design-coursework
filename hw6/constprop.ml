@@ -54,7 +54,7 @@ let rec fold_icmp cnd a b =
 
   match cnd with
   | Eq -> if comp = 0 then 1L else 0L
-  | Ne -> if comp = 0 then 1L else 0L 
+  | Ne -> if comp = 0 then 0L else 1L 
   | Slt -> if comp < 0 then 1L else 0L
   | Sle -> if  comp <= 0 then 1L else 0L
   | Sgt -> if comp > 0 then 1L else 0L
@@ -93,7 +93,7 @@ let insn_flow (u,i:uid * insn) (d:fact) : fact =
     | UndefConst, _ | _, UndefConst -> update_fact u UndefConst 
     |  NonConst, _  | _ , NonConst -> update_fact u NonConst
     end
-  | Store _ | Call _ -> update_fact u UndefConst
+  | Store _ | Call (Void, _, _) -> update_fact u UndefConst
   | _ -> update_fact u NonConst 
        
 
@@ -127,6 +127,8 @@ module Fact =
         let func key val1 val2 = 
           match val1, val2 with
           | (Some (Const a)), (Some (Const b)) -> if (Int64.compare a b) = 0 then Some (Const a) else Some NonConst 
+          | (Some (Const a), None) -> Some (Const a)
+          | (None, Some (Const b)) -> Some (Const b)
           | (Some (UndefConst)), _ | _, (Some (UndefConst)) -> Some UndefConst
           | (Some (NonConst)), _ | (_, Some(NonConst)) -> Some NonConst 
           | _, _ -> Some UndefConst
@@ -232,7 +234,7 @@ let fold_term (fact:fact) (t: Ll.terminator) : Ll.terminator =
       | (Const a) -> Ret (I64, Some (Ll.Const a))
       |  _ -> t
       end 
-  | Cbr (op1, lbl1, lbl2) as term ->
+  | Cbr (op1, lbl1, lbl2) ->
       let subst1 = lookup_operand op1 fact in
       begin match subst1 with
       | (Const a) -> Cbr (Ll.Const a, lbl1, lbl2)

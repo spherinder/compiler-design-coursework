@@ -68,8 +68,8 @@ module Fact =
        It may be useful to define a helper function that knows how to take the
        join of two SymPtr.t facts.
     *)
-    let combine (ds:fact list) : fact =
-      failwith "Alias.Fact.combine not implemented"
+    let combine (ds:fact list) : fact = List.hd ds
+      (* failwith "Alias.Fact.combine not implemented" *)
   end
 
 (* instantiate the general framework ---------------------------------------- *)
