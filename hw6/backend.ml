@@ -881,9 +881,9 @@ let color_to_reg color =
   | 3 -> R09 
   | 4 -> R10 
   | 5 -> R11 
-  | 6 -> Rbx
-  | 7 -> Rdi 
-  | 8 -> Rsi 
+  | 6 -> Rdi
+  | 7 -> Rsi 
+  | 8 -> Rbx 
   | 9 -> R12
   | 10 -> R13 
   | 11 -> R14
@@ -892,8 +892,8 @@ let color_to_reg color =
   | _ -> failwith "register not used for coloring"
  let arg_no_to_color (i:int) = 
   match i with
-  | 0 -> 7 
-  | 1 -> 8
+  | 0 -> 6 
+  | 1 -> 7
   | 2 -> 1
   | 3 -> 13
   | 4 -> 2
@@ -906,7 +906,7 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
   in
   let graph = CGraph.of_fdecl_liveness f live in
   let init_colors = List.fold_left (fun coloring uid -> incr c; UidM.add uid (arg_no_to_color !c) coloring ) UidM.empty  f.f_param in
-  let coloring = color_graph graph 5 init_colors in
+  let coloring = color_graph graph 7 init_colors in
 
   let _ = if !debug then print_endline @@ UidM.to_string (fun k v ->  Int.to_string v) coloring else () in
   let stack_slot_counter = ref 0 in

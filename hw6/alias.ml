@@ -33,9 +33,24 @@ type fact = SymPtr.t UidM.t
    - Other instructions do not define pointers
 
  *)
-let insn_flow ((u,i):uid * insn) (d:fact) : fact =
-  failwith "Alias.insn_flow unimplemented"
-
+let insn_flow ((u,i):uid * insn) : fact -> fact = SymPtr.(UidM.(
+    match i with
+    | Alloca _ -> add u Unique
+    | Load (Ptr (Ptr _), _) -> add u MayAlias
+    | Store (Ptr _, Id id, _) -> add id MayAlias
+    | Gep (Ptr _, Id id, _) -> add_seq @@ List.to_seq [u,MayAlias; id,MayAlias]
+    | Gep _ -> add u MayAlias
+    | Bitcast (Ptr _, Id id, Ptr _) -> add_seq @@ List.to_seq [u,MayAlias; id,MayAlias]
+    | Bitcast (Ptr _, Id id, _) -> add id MayAlias
+    | Bitcast (_, _, Ptr _) -> add u MayAlias
+    | Call (rt, _, args) -> add_seq (
+        List.to_seq @@ List.filter_map (function
+            | Ptr _, Id id -> Some (id, MayAlias)
+            | _ -> None
+          ) ((rt,Id u)::args)
+      )
+    | _ -> Fun.id
+  ))
 
 (* The flow function across terminators is trivial: they never change alias info *)
 let terminator_flow t (d:fact) : fact = d
@@ -68,8 +83,12 @@ module Fact =
        It may be useful to define a helper function that knows how to take the
        join of two SymPtr.t facts.
     *)
-    let combine (ds:fact list) : fact = List.hd ds
-      (* failwith "Alias.Fact.combine not implemented" *)
+    let combine (ds:fact list) : fact = List.fold_left (fun m d ->
+        UidM.union SymPtr.(fun _ v1 v2 ->
+            Some (if v1=MayAlias || v2=MayAlias then MayAlias else Unique)
+          ) m d
+      ) UidM.empty ds    
+      
   end
 
 (* instantiate the general framework ---------------------------------------- *)
