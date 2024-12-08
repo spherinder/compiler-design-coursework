@@ -93,6 +93,6 @@ let get_liveness (f : Ll.fdecl) : liveness =
         let lb = uid_info graph l in
         fun u -> try if l = u then l_in else lb u with Not_found -> f u)
       (Cfg.nodes cfg)
-      (fun u -> ((* print_endline u; *) raise Not_found)) in
+      (fun u -> ( (*print_endline u;*)  raise Not_found)) in
   { live_in = make_fn Graph.block_in Graph.uid_in;
     live_out = make_fn Graph.block_out Graph.uid_out}
